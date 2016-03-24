@@ -1,0 +1,6 @@
+name = 3devis Credit Notes
+description = A module to implement the credit notes.
+core = 7.x
+package = 3devis
+dependencies[] = commerce
+dependencies[] = rules

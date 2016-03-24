@@ -1,0 +1,284 @@
+<?php
+
+/**
+ * @file
+ * Installation and update functions for the 3devis site.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function trois_devis_schema() {
+  $schema['devis_provider_assoc'] = array(
+    'fields' => array(
+      'entityform_id' => array(
+        'type'        => 'int', 
+        'unsigned'    => TRUE, 
+        'not null'    => TRUE, 
+        'disp-width'  => 10,
+      ),
+      'uid'           => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'not null'    => TRUE, 
+        'default'     => 0, 
+        'disp-width'  => 10,
+      ),
+      'contacted'     => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'not null'    => TRUE, 
+        'default'     => 0,
+        'disp-width'  => 11,
+        'description' => 'Time the provider got contacted.', 
+      ),
+      'until_date'    => array(
+        'type'        => 'int',
+        'unsigned'    => FALSE,
+        'default'     => 0,
+        'disp-width'  => 11,
+        'description' => 'Until which time this request can be opened.',
+      ),
+      'opened_date'   => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'disp-width'  => 11,
+        'description' => 'Time the provider opened the request link.', 
+      ),
+      'checked'       => array(
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'Has the provider been checked already or not.',
+      ),
+      'email_sent'    => array(
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'Requestor has been notified.',
+      ),
+      'date'          => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'disp-width'  => 11,
+      ),
+      'url_info'      => array('type' => 'text'),
+      'url_accept'    => array('type' => 'text'),
+    ),
+    'indexes'       => array(
+      'uid'         => array('uid'),
+      'contacted'   => array('contacted'),
+      'checked'     => array('checked'),
+      'sent_email'  => array('sent_email'),
+    ),
+    'primary key' => array('entityform_id', 'uid'),
+  );
+  
+  $schema['devis_provider_reminder'] = array(
+    'fields' => array(
+      'uid'           => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'not null'    => TRUE, 
+        'default'     => 0, 
+        'disp-width'  => 10,
+      ),
+      'contacted'     => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'disp-width'  => 11,
+        'description' => 'Time the provider got contacted.', 
+      ),
+      '24h'           => array(
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'Provider has been reached 24h after acceptance.',
+      ),
+      '48h'           => array(
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'Provider has been reached 48h after acceptance.',
+      ),
+      '168h'          => array(
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'Provider has been reached 168h after acceptance.',
+      ),
+    ),
+    'primary key' => array('uid'),
+  );
+  return $schema;
+}
+
+/**
+ * Create new database table {devis_provider_assoc}.
+ */
+function trois_devis_update_7002() {
+  $schema['devis_provider_assoc'] = array(
+    'fields'      => array(
+      'entityform_id' => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'disp-width' => 10),
+      'uid'           => array('type' => 'int', 'unsigned' => FALSE, 'not null' => TRUE, 'default' => 0, 'disp-width' => 10),
+      'date'          => array('type' => 'int', 'unsigned' => FALSE, 'disp-width' => 11),
+      'url_info'      => array('type' => 'text'),
+    ),
+    'indexes'     => array('uid' => array('uid')),
+    'primary key' => array('entityform_id', 'uid'),
+  );
+  db_create_table('devis_provider_assoc', $schema['devis_provider_assoc']);
+}
+
+/**
+ * Add contacted field and index to {devis_provider_assoc} table.
+ */
+function trois_devis_update_7003() {
+  $spec = array(
+    'type' => 'int',
+    'description' => "Time the provider got contacted",
+    'unsigned' => FALSE,
+    'not null' => TRUE,
+    'disp-width' => 11,
+    'default' => 0,
+  ); 
+  db_add_field('devis_provider_assoc', 'contacted', $spec);
+  db_add_index('devis_provider_assoc', 'contacted', array('contacted'));
+}
+
+/**
+ * Add checked field and index to {devis_provider_assoc} table.
+ */
+function trois_devis_update_7004() {
+  $spec = array(
+    'type' => 'int',
+    'unsigned' => TRUE,
+    'default' => 0,
+    'disp-width' => 3,
+    'description' => 'Has the provider been checked already or not.',
+  );
+  db_add_field('devis_provider_assoc', 'checked', $spec);
+  db_add_index('devis_provider_assoc', 'checked', array('checked'));
+}
+
+/**
+ * Add extra field url_accept and opened_date to {devis_provider_assoc} table.
+ */
+function trois_devis_update_7005() {
+  $fields = array(
+    'url_accept' => array(
+      'type' => 'text',
+    ),
+    'opened_date'   => array(
+      'type'        => 'int', 
+      'unsigned'    => FALSE, 
+      'disp-width'  => 11,
+      'description' => 'Time the provider opened the request link.', 
+    ),
+  );
+
+  foreach ($fields as $key => $field)  {
+    if (!db_field_exists('devis_provider_assoc', $key)) {
+      db_add_field('devis_provider_assoc', $key, $field);
+    }
+  }
+}
+
+/**
+ * Add sent_email field and index to {devis_provider_assoc} table.
+ */
+function trois_devis_update_7006() {
+  $spec = array(
+    'type' => 'int',
+    'unsigned' => TRUE,
+    'default' => 0,
+    'disp-width' => 3,
+    'description' => 'Requestor has been notified.',
+  );
+  db_add_field('devis_provider_assoc', 'sent_email', $spec);
+  db_add_index('devis_provider_assoc', 'sent_email', array('sent_email'));
+}
+
+/**
+ * Add until_date field to {devis_provider_assoc} table.
+ */
+function trois_devis_update_7007() {
+  $spec = array(
+    'type' => 'int',
+    'unsigned' => FALSE,
+    'default' => 0,
+    'disp-width' => 11,
+    'description' => 'Until which time this request can be opened.',
+  );
+  db_add_field('devis_provider_assoc', 'until_date', $spec);
+}
+
+/**
+ * Create new database table {devis_provider_reminder}.
+ */
+function trois_devis_update_7008() {
+  $schema['devis_provider_reminder'] = array(
+    'fields' => array(
+      'uid' => array('type' => 'int', 'unsigned' => FALSE, 'not null' => TRUE, 'default' => 0, 'disp-width' => 10),
+      '24h' => array('type' => 'int', 'unsigned' => TRUE, 'default' => 0, 'disp-width'  => 3, 
+                     'description' => 'Provider has been reached 24h after acceptance.'),
+      '48h' => array('type' => 'int', 'unsigned' => TRUE, 'default' => 0, 'disp-width'  => 3, 
+                     'description' => 'Provider has been reached 48h after acceptance.'),
+    ),
+    'primary key' => array('uid'),
+  );
+  db_create_table('devis_provider_reminder', $schema['devis_provider_reminder']);
+}
+
+/**
+ * Add extra field contacted and 168h to {devis_provider_reminder} table.
+ */
+function trois_devis_update_7009() {
+  $fields = array(
+    'contacted'     => array(
+      'type'        => 'int', 
+      'unsigned'    => FALSE, 
+      'disp-width'  => 11,
+      'description' => 'Time the provider got contacted.', 
+    ),
+    '168h'          => array(
+      'type'        => 'int',
+      'unsigned'    => TRUE,
+      'default'     => 0,
+      'disp-width'  => 3,
+      'description' => 'Provider has been reached 168h after acceptance.',
+    ),
+  );
+
+  foreach ($fields as $key => $field)  {
+    if (!db_field_exists('devis_provider_reminder', $key)) {
+      db_add_field('devis_provider_reminder', $key, $field);
+    }
+  }
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function trois_devis_uninstall() {
+  variable_del('trois_devis_hash_key');
+  variable_del('trois_devis_terms_nid');
+  
+  variable_del('trois_devis_first_step_message');
+  variable_del('trois_devis_second_step_message');
+  variable_del('trois_devis_third_step_message');
+  
+  variable_del('trois_devis_reset_count');
+  variable_del('trois_devis_check_budget');
+  
+  // Remove jobs.
+  $job = array('type' => 'troid_devis_reset', 'id' => 1);
+  JobScheduler::get('trois_devis_reset_task')->remove($job);
+  $job = array('type' => 'trois_devis_check_budget', 'id' => 1);
+  JobScheduler::get('trois_devis_check_budget_task')->remove($job);
+}

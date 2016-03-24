@@ -1,0 +1,6 @@
+name = Commerce License Billing Budget (3devis)
+description = Provides a Commerce Billing license type for selling budgets on 3devis.
+core = 7.x
+package = 3devis
+dependencies[] = commerce_license_billing
+dependencies[] = commerce_product_ui

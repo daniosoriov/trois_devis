@@ -1,0 +1,6 @@
+name = Views Alter Query
+description = A module to alter views's queries by the user. (3devis)
+core = 7.x
+package = 3devis
+dependencies[] = views
+files[] = includes/views/views_alter.views.inc

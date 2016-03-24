@@ -1,0 +1,14 @@
+<?php
+
+/**
+ * Implements hook_uninstall().
+ */
+function commerce_license_billing_budget_uninstall() {
+  // Delete the fields created and attached to this module's bundles.
+  field_attach_delete_bundle('commerce_license', 'billing_budget');
+  // Delete the budget field.
+  field_delete_field('cl_billing_budget');
+
+  // Delete variable settings.
+  variable_del('cl_billing_budget_product_types');
+}

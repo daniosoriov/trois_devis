@@ -1,0 +1,13 @@
+name = 3devis Module
+description = A module to add all extra custom functionality to 3devis.
+core = 7.x
+package = 3devis
+dependencies[] = commerce_addressbook
+dependencies[] = commerce_customer
+dependencies[] = commerce_license_billing
+dependencies[] = entityform
+dependencies[] = job_scheduler
+dependencies[] = rules
+
+; NEW LINE
+configure = admin/config/content/trois_devis

@@ -1,0 +1,194 @@
+<?php
+
+/**
+ * @file
+ * Creates credit notes to orders based on rules.
+ *
+ * Idea taken from: http://www.andersonproject.com/2013/12/advanced-discounts-with-drupal-commerce
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function credit_note_menu() {
+  $items = array();
+  $items['admin/config/content/trois_devis/credit_note'] = array(
+    'title'            => 'Add Credit Note',
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('credit_note_administration_form'),
+    'access arguments' => array('administer 3devis'),
+    'description'      => 'Adding credit notes to orders.',
+    'file'             => 'credit_note.admin.inc',
+    'type'             => MENU_NORMAL_ITEM,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_commerce_line_item_type_info().
+ * Creates a new line item type.
+ */
+function credit_note_commerce_line_item_type_info() {
+  return array(
+    'credit_note_product' => array(
+      'name' => t('Note de crédit'),
+      'product' => TRUE,
+      'description' => t('Line item for credit notes.'),
+      'add_form_submit_value' => t('Add to cart'),
+      'base' => 'credit_note_line_item',
+    ),
+  );
+}
+
+/**
+ * Implements hook_title()
+ * Returns the title of the line item
+ */
+function credit_note_line_item_title($line_item) {
+  $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+  return $line_item_wrapper->commerce_product->title->value();
+}
+
+/**
+ * Implementation of hook_commerce_price_component_type_info().
+ * Creates a new discount price component type
+ */
+function credit_note_commerce_price_component_type_info() {
+  return array(
+    'credit_note' => array(
+      'title' => t('Note de crédit'),
+      'weight' => -10,
+    ),
+  );
+}
+
+/**
+ * Allows modules to alter the price component types defined by other modules.
+ */
+function credit_note_commerce_price_component_type_info_alter(&$component_types) {
+  //$component_types['base_price']['weight'] = -100; // Move Base Price at the beginning.
+  //$component_types['credit_note']['weight'] = $component_types['base_price']['weight'] + 1; // Move Discount just before the Base Price.
+}
+
+function credit_note_commerce_price_formatted_components_alter(&$components, $price, $entity) {
+  if (isset($components['tax|tva'])) {
+    $components['tax|tva']['weight'] = 1;
+  }
+  if (isset($components['credit_note'])) {
+    //$components['credit_note']['weight'] = 2;
+    /*$price = $components['credit_note']['price']['amount'];
+    $amount = $price + ($price * -1) / 1.21;
+    $components['tax|tva']['price']['amount'] += $amount;
+    dpm($amount, 'amount');*/
+  }
+  $components['commerce_price_formatted_amount']['weight'] = 3;
+}
+
+
+
+/**
+ * Adds a credit note to a given user.
+ */
+function credit_note_add_credit_note_line_item($uid) {
+  // First, check if the user has only one recurring open order.
+  $orders = commerce_order_load_multiple(array(), array('uid' => $uid, 'status' => 'recurring_open'));
+  if (count($orders) > 1) {
+    drupal_set_message('Cannot add a credit note to this user since it has more than one "Recurring Open" order. Please check that there is just one and try again.');
+    return FALSE;
+  }
+  $order_id = key($orders);
+  $order = current($orders);
+  $lang = key($orders[$order_id]->commerce_line_items);
+  foreach ($orders[$order_id]->commerce_line_items[$lang] as $key => $val) {
+    $order_line_items[] = $val['line_item_id'];
+  }
+  $line_items = commerce_line_item_load_multiple($order_line_items, array('order_id' => $order_id, 'line_item_label' => 'credit_note'));
+  
+  // There are no credit note line items yet, so we can create one.
+  if (!$line_items) {
+    $license = commerce_license_billing_get_master_license($uid);
+    if ($license) {
+      $usage_group = commerce_license_billing_usage_group($license, 'general_credit_note');
+      $usage_group->addUsage($license->revision_id, 1);
+      drupal_set_message(t('Credit note added to the user, please create the rule to apply the credit note.'));
+    }
+  }
+  else {
+    drupal_set_message(t('The credit note already exists for this user. Double check the rule!'), 'warning');
+  }
+  return TRUE;
+  /*
+  else {
+    $line_item = current($line_items);
+    $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+    $unit_price = commerce_price_wrapper_value($line_item_wrapper, 'commerce_unit_price', TRUE);
+
+    // Calculate the updated amount and create a price array representing the
+    // difference between it and the current amount.
+    $current_amount = $unit_price['amount'];
+    $updated_amount = $discount * -100;
+
+    $difference = array(
+      'amount' => $updated_amount - $current_amount,
+      'currency_code' => $unit_price['currency_code'],
+      'data' => array(),
+    );
+
+    // Set the amount of the unit price and add the difference as a component.
+    $line_item_wrapper->commerce_unit_price->amount = $updated_amount;
+
+    $line_item_wrapper->commerce_unit_price->data = commerce_price_component_add(
+      $line_item_wrapper->commerce_unit_price->value(),
+      $component_name,
+      $difference,
+      TRUE
+    );
+    commerce_line_item_rebase_unit_price($line_item_wrapper->value());
+    commerce_line_item_save($line_item_wrapper->value());
+    
+    
+    
+    
+    
+    
+    
+    //$lang = key($line_item->commerce_unit_price);
+    //$price = $discount * -100;
+    //$line_item->commerce_unit_price[$lang][0]['amount'] = $price;
+    //alter the base_price component
+    //$line_item->commerce_unit_price[$lang][0]['data']['components'][0]['price']['amount'] = $price;
+    
+    
+    /*
+    if ($line_item_wrapper->value()->type == 'recurring') {
+      // Find the total discount on the line item
+      //$discount_quantity = floor($line_item_wrapper->quantity->value() / 2);
+      //$discount_total_ammount = $discount_quantity * $line_item_wrapper->commerce_unit_price->amount->value() * .3;
+
+      // The discount is applied to the unit price, so we need to make sure
+      // our discount is per unit
+      //$discount = $discount_total_ammount / $line_item_wrapper->quantity->value();   
+
+      if ($discount) {
+        //commerce_price_component_delete($line_item_wrapper->commerce_unit_price->value(), 'promotion');
+        // Add the discount as a price component
+        $line_item_wrapper->commerce_unit_price->data = commerce_price_component_add(
+          $line_item_wrapper->commerce_unit_price->value(),
+          'promotion',
+          array(
+            'amount' => $discount,// * -1,
+            'currency_code' => 'EUR',
+            'data' => array()
+          ),
+          0 // NOT included already in the price
+        );
+        commerce_line_item_rebase_unit_price($line_item_wrapper->value());
+        commerce_line_item_save($line_item_wrapper->value());
+        
+        dpm($order, 'inside! order');
+      }
+    }
+  }
+  */
+}
+

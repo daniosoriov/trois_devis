@@ -1,0 +1,33 @@
+<?php
+/**
+ * @file
+ * A module to add custom filters to queries in Views.
+ */
+
+/**
+ * Implements hook_help().
+ * 
+ * Displays help and module information.
+ * 
+ * @param $path
+ *  Which path of the site we're using to display help
+ * @param $arg
+ *  Array that holds the current path as returned from arg() function
+ */
+function views_alter_help($path, $arg) {
+    switch ($path) {
+        case "admin/help#views_alter":
+            return '<p>'. t("Alters queries in Views to have more customization.") .'</p>';
+        break;
+    }
+}
+
+/**
+ * Implements hook_views_api().
+ */
+function views_alter_views_api() {
+    return array(
+        'api' => 3,
+        'path' => drupal_get_path('module', 'views_alter') .'/includes/views',
+    );
+}

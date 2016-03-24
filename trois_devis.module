@@ -1,0 +1,1843 @@
+<?php
+
+/**
+ * @file
+ * A module to add all extra custom functionality to 3devis.
+ */
+
+/**
+ * Implements hook_help().
+ * 
+ * Displays help and module information.
+ * 
+ * @param $path
+ *  Which path of the site we're using to display help
+ * @param $arg
+ *  Array that holds the current path as returned from arg() function
+ */
+function trois_devis_alter_help($path, $arg) {
+  switch ($path) {
+    case "admin/help#trois_devis":
+      return '<p>'. t("Adds extra custom functionality to 3devis.") .'</p>';
+    break;
+  }
+}
+
+/*
+ * Implements hook_cron().
+ */
+function trois_devis_cron() {
+  $query = "
+    SELECT `entityform_id`, `uid`, TIMESTAMPDIFF(MINUTE, FROM_UNIXTIME(`date`), NOW()) as min_since_accepted
+    FROM `devis_provider_assoc` 
+    WHERE `sent_email` = 0
+      AND `contacted` >= UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 4 DAY))
+      AND `date` IS NOT NULL
+  ";
+  $result = db_query($query, array())->fetchAll();
+  $queue = DrupalQueue::get('trois_devis_queue_mails');
+  
+  $data = $ignore = array();
+  foreach ($result as $res) {
+    if ($res->min_since_accepted < 10) {
+      $ignore[$res->entityform_id] = $res->entityform_id;
+    }
+    $data[$res->entityform_id][$res->uid] = $res->min_since_accepted;
+  }
+  //watchdog('devis', 'Data <pre>@print_r</pre>', array('@print_r' => print_r($data, TRUE)));
+  
+  foreach ($data as $entityform_id => $void) {
+    // If we don't have to ignore it, then add it to the queue.
+    if (!array_key_exists($entityform_id, $ignore)) {
+      $info = array($entityform_id => $data[$entityform_id]);
+      $queue->createItem($info);
+    }
+  }
+  
+  
+  // Clean invoices that are payment pending with 0 because they didn't buy anything.
+  $query = "SELECT order_id FROM commerce_order WHERE status = 'recurring_payment_pending'";
+  $result = db_query($query, array())->fetchAll();
+  $queue = DrupalQueue::get('trois_devis_clean_invoice_queue_new');
+  foreach ($result as $tmp) {
+    $order = commerce_order_load($tmp->order_id);
+    $lang = key($order->commerce_order_total);
+    $total = $order->commerce_order_total[$lang][0]['amount'];
+    $lang = key($order->commerce_line_items);
+    $line_items = count($order->commerce_line_items[$lang]);
+    // If the total is zero and there's more than one line item,
+    // then we can send the invoice to the provider.
+    if ($total == 0 && $line_items > 1) {
+      $queue->createItem($order);
+    }
+  }
+  
+  
+  // Send reminder to providers who have not fully registered.
+  $query = "
+    SELECT users.uid, dpr.contacted, dpr.24h, dpr.48h, dpr.168h
+    FROM users 
+    INNER JOIN users_roles ON users_roles.uid = users.uid
+    INNER JOIN role ON role.name = 'provider' AND role.rid = users_roles.rid
+    INNER JOIN devis_provider_reminder dpr ON dpr.uid = users.uid
+    WHERE (users.uid NOT IN (
+      SELECT `legal_accepted`.uid
+      FROM `legal_accepted`
+      WHERE `legal_accepted`.`version` IN (SELECT MAX(`version`) FROM `legal_conditions`)
+    )
+    OR users.access = 0
+    OR users.pass = '')
+    AND 
+    (dpr.24h = 0 OR dpr.48h = 0 OR dpr.168h = 0)
+  ";
+  $result = db_query($query, array())->fetchAll();
+  $queue = DrupalQueue::get('trois_devis_send_provider_reminder_queue');
+  foreach ($result as $tmp) {
+    $time = $hours = 0;
+    // If the provider has not been contacted after 24h,
+    // send a reminder email.
+    $hours = time() - $tmp->contacted;
+    if ($tmp->{'24h'} == 0) {
+      if ($hours > (24 * 60 * 60) && $hours < (48 * 60 * 60)) {
+        $time = '24h';
+        $hours = 24;
+      }
+    }
+    else {
+      // If the provider has not been contacted after 48h,
+      // send a reminder email.
+      if ($tmp->{'48h'} == 0) {
+        if ($hours > (48 * 60 * 60) && $hours < (168 * 60 * 60)) {
+          $time = '48h';
+          $hours = 48;
+        }
+      }
+      else {
+        if ($tmp->{'168h'} == 0) {
+          if ($hours > (168 * 60 * 60)) {
+            $time = '168h';
+            $hours = 168;
+          }
+        }
+      }
+    }
+    if ($time) {
+      db_update('devis_provider_reminder')
+        ->fields(array(
+          $time => 1
+        ))
+        ->condition('uid', $tmp->uid)
+        ->execute();
+      $tmp->hours = $hours;
+      // We're not sending the 48 hours email anymore.
+      if ($time != '48h') {
+        $queue->createItem($tmp);
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_cron_queue_info().
+ */
+function trois_devis_cron_queue_info() {
+  $queues['trois_devis_queue_mails'] = array(
+    'worker callback' => 'trois_devis_manage_emails_for_request',
+    'time' => 60,
+  );
+  $queues['trois_devis_clean_invoice_queue_new'] = array(
+    'worker callback' => 'trois_devis_clean_invoice_new',
+    'time' => 60,
+  );
+  $queues['trois_devis_send_provider_reminder_queue'] = array(
+    'worker callback' => 'trois_devis_send_provider_reminder',
+    'time' => 60,
+  );
+  return $queues;
+}
+
+
+/**
+ * Cleans the invoices that are in payment pending status with
+ * total amount of 0.
+ */
+function trois_devis_clean_invoice_new($order) {
+  rules_invoke_component('rules_charge_orders_with_0_amount', $order);
+}
+
+/**
+ * Sends reminder emails to the providers that have not completed
+ * the registration process.
+ */
+function trois_devis_send_provider_reminder($data) {
+  $account = user_load($data->uid);
+  rules_invoke_component('rules_provider_reminder_email', $account, $data->hours);
+}
+
+/**
+ * Checks the providers that have accepted a budget
+ * and tries to send an email to the requester with all the contacts
+ * together.
+ */
+function trois_devis_manage_emails_for_request($data) {
+  $users = array();
+  $entityform_id = key($data);
+  foreach ($data[$entityform_id] as $uid => $minutes) {
+    $account = user_load($uid);
+    $variables = array(
+      '@url' => '/user/'. $uid, 
+      '@user' => format_username($account), 
+      '@entityform_id' => $entityform_id,
+      '@urle' => '/entityform/'. $entityform_id,
+    );
+    watchdog('devis', 'Information about provider <a href="@url">@user</a> has been sent to the requester on entityform <a href="@urle">@entityform_id</a>', $variables);
+    $users[$uid] = $account;
+    
+    // Set the providers to sent, to avoid sending the same info later.
+    db_update('devis_provider_assoc')
+      ->fields(array(
+        'sent_email' => 1
+      ))
+      ->condition('entityform_id', $entityform_id)
+      ->condition('uid', $uid)
+      ->execute();
+  }
+  // Send email to the requester using rules.
+  $entityform = entityform_load($entityform_id);
+  rules_invoke_component('rules_budget_provider_has_accepted_send_to_requestor', $users, $entityform);
+}
+
+/**
+ * Implements hook_permission().
+ */
+function trois_devis_permission() {
+  $perms = array(
+    'administer 3devis' => array(
+      'title' => t('Administer 3devis configurations'),
+      'description' => t('Administer 3devis configurations.'),
+    ),
+  );
+
+  // Fetch all components to generate the access keys.
+  $conditions['plugin'] = array_keys(rules_filter_array(rules_fetch_data('plugin_info'), 'component', TRUE));
+  $conditions['access_exposed'] = 1;
+  $components = entity_load('rules_config', FALSE, $conditions);
+  $perms += rules_permissions_by_component($components);
+
+  return $perms;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function trois_devis_menu() {
+  $items = array();
+  $items['admin/config/content/trois_devis'] = array(
+    'title'            => '3devis',
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('trois_devis_administration_form'),
+    'access arguments' => array('administer 3devis'),
+    'description'      => 'General configuration page for 3devis modules.',
+    'file'             => 'trois_devis.admin.inc',
+    'type'             => MENU_NORMAL_ITEM,
+  );
+  $items['admin/config/content/trois_devis/entity_template'] = array(
+    'title'            => 'Entity Template',
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('trois_devis_administration_template_form'),
+    'access arguments' => array('administer 3devis'),
+    'description'      => 'Create entityform email template',
+    'file'             => 'trois_devis.admin.inc',
+    'type'             => MENU_LOCAL_TASK,
+  );
+  
+  $items['adminpage/request/budget/entity_template'] = array(
+    'title'            => 'Budget request e-mail template generator',
+    'page callback'    => 'trois_devis_entity_template_content',
+    'page arguments'   => array(4),
+    'access arguments' => array('administer 3devis'),
+    'description'      => 'Create entityform email template',
+    'file'             => 'trois_devis.admin.inc',
+    'type'             => MENU_NORMAL_ITEM,
+  );
+  
+  $items['devis_accept/%'] = array(
+    'title' => 'Information de votre devis',
+    //'description' => 'This is the information.',
+    'page callback' => 'trois_devis_show_info',
+    'page arguments' => array(1, TRUE),
+    'type' => MENU_CALLBACK,
+    'access callback' => 'trois_devis_access_devis_info',
+    'access arguments' => array(1, TRUE),
+  );
+  $items['devis_info/%'] = array(
+    'title' => 'Information de votre devis',
+    //'description' => 'This is the information.',
+    'page callback' => 'trois_devis_show_info',
+    'page arguments' => array(1),
+    'type' => MENU_CALLBACK,
+    'access callback' => 'trois_devis_access_devis_info',
+    'access arguments' => array(1),
+  );
+  return $items;
+}
+
+function trois_devis_access_devis_info($hash, $accept = FALSE) {
+  return (_trois_devis_get_info($hash, $accept)) ? TRUE : FALSE;
+}
+
+/**
+* Implements hook_views_api().
+*/
+function trois_devis_views_api() {
+  return array(
+    'api' => 3,
+    'path' => drupal_get_path('module', 'trois_devis') . '/views',
+  );
+}
+
+function trois_devis_entity_template_content($entityform_id = 0) {
+  $content = '';
+  $br = array();
+  $br[] = l('Admin Page', 'adminpage');
+  $br[] = l('Budgets', 'adminpage/request');
+  if ($entityform_id) {
+    $br[] = l('Budget request '. $entityform_id, 'entityform/'. $entityform_id);
+  }
+  $content .= implode($br, ' > ');
+  $content .= '<br /><br />';
+  $content .= render(drupal_get_form('trois_devis_administration_template_form', $entityform_id));
+  return $content;
+}
+
+/**
+ * Displays the information about the budget requested in the hash.
+ */
+function trois_devis_show_info($hash, $accept = FALSE) {
+  $content = $title = $extra = '';
+  
+  $info = _trois_devis_get_info($hash, $accept);
+  $entityform_id = $info->entityform_id;
+  $entityform = entityform_load($entityform_id);
+  
+  global $user;
+  $anonymous = user_is_anonymous();
+    
+  // If the entityform doesn't exist, send a drupal_not_found().
+  if (!$entityform) {
+    drupal_not_found();
+  }
+  // In case it's the time to accept, check that everything is valid.
+  if ($accept) {
+    // Check if the user is seeing the anonymous request but being logged in.
+    if (!$anonymous && !$info->uid) {
+      // If the user was previously contacted, then check his/her url token.
+      $hash_user = _trois_devis_get_hash($entityform_id, $user->uid, TRUE);
+      // If there's no information about this user, then create it based on the values.
+      if (!$hash_user) {
+        // Update user values about the connection.
+        rules_invoke_component('rules_budget_provider_contacted_new', $user, $entityform, $info->contacted);
+        $hash_user = _trois_devis_get_hash($entityform_id, $user->uid, TRUE);
+      }
+      // Then, we redirect the user to the correct page.
+      drupal_goto('devis_accept/'. $hash_user);
+    }
+    
+    $message = '';
+    if (!_trois_devis_is_request_valid($info, $message)) {
+      $content = $message;
+      drupal_set_title(t('Budget request no longer valid'));
+      return $content;
+    }
+  }
+  
+  // Everything is correct, render the entityform.
+  $entity = entity_view('entityform', array($entityform), 'budget_info', NULL, TRUE);
+  
+  // Fix the layout for estimated values.
+  if (isset($entity['entityform'][$entityform_id]['field_estimated_annual_revenue']) && 
+      $entity['entityform'][$entityform_id]['field_annual_revenue']['#items'][0]['value'] == 'nonexistent') {
+    $entity['entityform'][$entityform_id]['field_annual_revenue'][0]['#markup'] .= ' '.
+      $entity['entityform'][$entityform_id]['field_estimated_annual_revenue'][0]['#markup'];
+    $entity['entityform'][$entityform_id]['field_estimated_annual_revenue']['#access'] = FALSE;
+  }
+  if (isset($entity['entityform'][$entityform_id]['field_estimated_annual_invoice']) && 
+      $entity['entityform'][$entityform_id]['field_annual_invoice']['#items'][0]['value'] == 'nonexistent') {
+    $entity['entityform'][$entityform_id]['field_annual_invoice'][0]['#markup'] .= ' '.
+      $entity['entityform'][$entityform_id]['field_estimated_annual_invoice'][0]['#markup'];
+    $entity['entityform'][$entityform_id]['field_estimated_annual_invoice']['#access'] = FALSE;
+  }
+  if (isset($entity['entityform'][$entityform_id]['field_estimated_number_employees']) && 
+      $entity['entityform'][$entityform_id]['field_number_employees']['#items'][0]['value'] == 'nonexistent') {
+    $entity['entityform'][$entityform_id]['field_number_employees'][0]['#markup'] .= ' '.
+      $entity['entityform'][$entityform_id]['field_estimated_number_employees'][0]['#markup'];
+    $entity['entityform'][$entityform_id]['field_estimated_number_employees']['#access'] = FALSE;
+  }
+  // Fix the has accountant reason.
+  if (isset($entity['entityform'][$entityform_id]['field_change_accountant_reason']) && 
+      $entity['entityform'][$entityform_id]['field_change_accountant_reason']['#items'][0]['value'] == 'other') {
+    $entity['entityform'][$entityform_id]['field_change_accountant_reason'][0]['#markup'] = ' '.
+      $entity['entityform'][$entityform_id]['field_change_accountant_other'][0]['#markup'];
+    $entity['entityform'][$entityform_id]['field_change_accountant_other']['#access'] = FALSE;
+  }
+  
+  // Add the description to the desired benefits field.
+  $full = t('tenue de la comptabilité, bilan, déclarations de TVA et d’impôts, conseils en fiscalité');
+  $part = t("création d'entreprise, plan financier, budget, business plan");
+  $desired_benefits = $entity['entityform'][$entityform_id]['field_desired_benefits']['#items'][0]['value'];
+  $desc = ($desired_benefits == 'full') ? $full : $part;
+  $entity['entityform'][$entityform_id]['field_desired_benefits'][0]['#markup'] .= ' ('. $desc .')';
+  
+  // If we are displaying the full budget.
+  if (!$accept) {
+    // Update database to indicate that the provider has accepted.
+    db_update('devis_provider_assoc')
+      ->fields(array(
+        'date' => REQUEST_TIME
+      ))
+      ->condition('entityform_id', $entityform_id)
+      ->condition('uid', $info->uid)
+      ->isNull('date')
+      ->execute();
+    
+    // Hide the two fields that were protected for emails.
+    $entity['entityform'][$entityform_id]['field_info_extra']['#access'] = FALSE;
+    $entity['entityform'][$entityform_id]['field_activity']['#access'] = FALSE;
+    $entity['entityform'][$entityform_id]['field_info_extra_admin']['#access'] = TRUE;
+    $entity['entityform'][$entityform_id]['field_activity_admin']['#access'] = TRUE;
+    
+    $entity['entityform'][$entityform_id]['code_postal']['#access'] = FALSE;
+    
+    // Fix the layout of the name.
+    $entity['entityform'][$entityform_id]['field_tva']['#access'] = TRUE;
+    $entity['entityform'][$entityform_id]['field_honorific']['#access'] = FALSE;
+    $honorific = $entity['entityform'][$entityform_id]['field_honorific'][0]['#markup'];
+    $entity['entityform'][$entityform_id]['field_prenom']['#access'] = FALSE;
+    $first_name = $entity['entityform'][$entityform_id]['field_prenom'][0]['#markup'];
+    $last_name = $entity['entityform'][$entityform_id]['field_name'][0]['#markup'];
+    $entity['entityform'][$entityform_id]['field_name'][0]['#markup'] = $honorific .' '. $first_name .' '. $last_name;
+  
+    // Change Society or Association depending on the legal status.
+    $legal_status = $entity['entityform'][$entityform_id]['field_legal_status']['#items'][0]['value'];
+    if ($legal_status == 'society') {
+      $entity['entityform'][$entityform_id]['field_company_name']['#title'] = t('Société');
+    }
+    elseif ($legal_status == 'association') {
+      $entity['entityform'][$entityform_id]['field_company_name']['#title'] = t('Association');
+    }
+    
+    $budget_nr = trois_devis_get_entityform_print_id($entityform);
+    
+    // Extra fieldset.
+    // Budget Number.
+    $entity['entityform'][$entityform_id]['budget_number'][0]['#markup'] = $budget_nr;
+    // Contacted date.
+    $entity['entityform'][$entityform_id]['budget_contacted_date'][0]['#markup'] = format_date($info->contacted, 'long');
+    // Put the date of acceptance.
+    $query = "SELECT date FROM {devis_provider_assoc} WHERE entityform_id = :entityform_id AND uid = :uid";
+    $date = db_query($query, array(':entityform_id' => $entityform_id, ':uid' => $info->uid))->fetchField();
+    $entity['entityform'][$entityform_id]['accepted_date'][0]['#markup'] = format_date($date, 'long');
+    
+    // Fix the title of the page.
+    $title = t('Détails de la demande de devis n° @id', array('@id' => $budget_nr));
+    
+    // Small breadcrumb for user.
+    $url = l(t('My requests'), 'user/'. $info->uid .'/demandes');
+    $url_a = l(t('My accepted requests'), 'user/'. $info->uid .'/demandes/accepted');
+    if ($anonymous) {
+      $url = l(t('My requests'), 'user/login', array('query' => array('destination' => 'user/'. $info->uid .'/demandes')));
+      $url_a = l(t('My accepted requests'), 'user/login', array('query' => array('destination' => 'user/'. $info->uid .'/demandes/accepted')));
+    }
+    $extra = '<br/>';
+    $extra .= l(t('My account'), 'user/'. $info->uid) .' | ';
+    $extra .= $url .' | ';
+    $extra .= $url_a;
+  }
+  // If displaying the partial budget.
+  else {
+    // Disable all fields in the additional information fieldset.
+    $cycle = $entity['entityform'][$entityform_id]['#groups']['group_extra']->children;
+    foreach ($cycle as $label) {
+      $entity['entityform'][$entityform_id][$label]['#access'] = FALSE;
+    }
+    
+    $account = user_load($info->uid);
+    $lang = key($entityform->field_prenom);
+    $client_name = $entityform->field_prenom[$lang][0]['safe_value'];
+    $lang = key($entityform->field_name);
+    $client_name .= ' '. ucfirst(substr($entityform->field_name[$lang][0]['safe_value'], 0, 1)) .'.';
+    
+    // If the user exists.
+    if ($account->uid) {
+      // Fix the title of the page.
+      $lang = key($account->field_honorific);
+      $honorific = ($account->field_honorific[$lang][0]['value'] == 'male') ? 'Monsieur' : 'Madame';
+      $name = $honorific .' '. $account->realname;
+      $title = t('@name, @client_name awaits for your response', array('@name' => $name, '@client_name' => $client_name));
+      
+      // Update database to indicate that the provider has seen the information.
+      db_update('devis_provider_assoc')
+        ->fields(array(
+          'opened_date' => REQUEST_TIME
+        ))
+        ->condition('entityform_id', $entityform_id)
+        ->condition('uid', $info->uid)
+        ->isNull('opened_date')
+        ->execute();
+      
+      // if the user is not able to accept the budget, show a message.
+      if (!_trois_devis_user_is_able($account->uid)) {
+        $url = url('user/'. $account->uid .'/cards');
+        drupal_set_message(t('Your profile is not active. <a href="@add_card">Please add a valid credit card</a> and activate your account.', array('@add_card' => $url)), 'error');
+      }
+    }
+    else {
+      $login = url('user', array('query' => array('destination' => 'devis_accept/'. $info->url_accept)));
+      $register = url('eform/submit/devenir', array('fragment' => 'void'));
+      drupal_set_message(t('<a href="@login">Login</a> or <a href="@register">Register</a> to view the full budget.', array('@login' => $login, '@register' => $register)), 'status', FALSE);
+      $title = t('@client_name awaits for your response', array('@client_name' => $client_name));
+    }
+    
+    // Remove the information the customer should not see in this stage.
+    $remove = array('field_name', 'field_prenom', 'field_company_name', 'field_tva', 'field_honorific', 
+                    'field_email', 'field_phone_belgium', 
+                    'field_adresse', 'field_website');
+    foreach ($remove as $rem) {
+      $entity['entityform'][$entityform_id][$rem]['#access'] = FALSE;
+    }
+    
+    $info->entityform = $entityform;
+    $info->account = $account;
+    $extra = render(drupal_get_form('trois_devis_accept_budget_form', $info));
+  }
+  
+  drupal_set_title($title);
+  $content .= render($entity) . $extra;
+  return $content;
+}
+
+function trois_devis_accept_budget_form($form, &$form_state, $info) {
+  $form = array();
+  $theme_path = drupal_get_path('theme', variable_get('theme_default', NULL));
+
+  $form['#attached']['js'][] = $theme_path .'/js/countdown/jquery.plugin.js';
+  $form['#attached']['js'][] = $theme_path .'/js/countdown/jquery.countdown.js';
+  $form['#attached']['js'][] = $theme_path .'/js/countdown/jquery.countdown-fr.js';
+  $form['#attached']['css'][] = $theme_path .'/css/countdown.css';
+  
+  $form['accept'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('View the full budget'),
+    '#collapsible' => FALSE,
+    '#collapsed' => FALSE,
+  );
+  
+  // Get the price of the request.
+  $price_display = trois_devis_get_entityform_price($info->entityform);
+  $form['accept']['text1'] = array(
+    '#markup' => '<p>'. t('By accepting, you will be redirected to the page with the full information about the client.') .'</p>',
+  );
+  $form['accept']['text2'] = array(
+    '#markup' => '<p>'. t('Seuls les cinq premiers cabinets comptables auront la possibilité de répondre à cette demande.') .'</p>',
+  );
+  $form['accept']['text3'] = array(
+    '#markup' => '<p><strong>'. t('The price for this budget request is:') .'</strong></p>',
+  );
+  $form['accept']['text4'] = array(
+    '#markup' => '<div class="price_display">'. $price_display .'</div>',
+  );
+  //$form['accept']['countdown'] = array(
+  //  '#markup' => '<p><div id="defaultCountdown"></div></p>',
+  //);
+  $form['info'] = array('#type' => 'value', '#value' => $info);
+  if ($info->uid) {
+    $form['accept']['submit'] = array(
+      '#type' => 'submit', 
+      '#name' => 'accept',
+      '#value' => t('Accept and reply to the request'),
+    );
+  }
+  else {
+    $form['accept']['login'] = array(
+      '#type' => 'submit',
+      '#name' => 'login',
+      '#value' => t('Login to view'),
+      '#suffix' => t('or') .'&nbsp;&nbsp;&nbsp;&nbsp;',
+    );
+    $form['accept']['register'] = array(
+      '#type' => 'submit', 
+      '#name' => 'register',
+      '#value' => t('Register to view'),
+    );
+  }
+  /*$stats = array(
+    'minutesLeft' => $info->min_left, //(48 * 60) - $info->min_since_contacted,
+    'description' => t('Time left to reply'),
+    'expiryText' => t('The time to accept this request has expired.'),
+  );
+  drupal_add_js(array('stats' => $stats), 'setting');*/
+  return $form;
+}
+
+function trois_devis_accept_budget_form_validate($form, &$form_state) {
+  if ($form_state['clicked_button']['#name'] == 'accept') {
+    $info = $form_state['values']['info'];
+    $message = '';
+    // Validate that the request is still valid to be accepted.
+    // Otherwise, block the user.
+    if (!_trois_devis_is_request_valid($info, $message)) {
+      form_set_error('form', $message);
+    }
+    // If the user profile is not valid to accept requests, 
+    // block the request and send the user to his/her profile.
+    if (!_trois_devis_user_is_able($info->uid)) {
+      $url = url('user/'. $info->account->uid .'/cards');
+      form_set_error('form', t('Your profile is not active. <a href="@add_card">Please add a valid credit card</a> and activate your account.', array('@add_card' => $url)));
+    }
+  }
+}
+
+function trois_devis_accept_budget_form_submit($form, &$form_state) {
+  $info = $form_state['values']['info'];
+  $clicked = $form_state['clicked_button']['#name'];
+  switch ($clicked) {
+    case 'login':
+      $form_state['redirect'] = array('user', array('query' => array('destination' => 'devis_accept/'. $info->url_accept)));
+      break;
+      
+    case 'register':
+      $form_state['redirect'] = array('eform/submit/devenir', array('fragment' => 'void'));
+      break;
+      
+    case 'accept':
+      // Everything is ok, so now we can charge the user and send 
+      // him to the new page.
+      _trois_devis_accept_budget($info->account, $info->entityform);
+      $form_state['redirect'] = 'devis_info/'. $info->url_info;
+
+      // Also, take care of possible promotion reductions.
+      if (module_exists('promo_code')) {
+        promo_code_add_promo_code_line_item($info->account);
+      }
+
+      // Inform support about it.
+      rules_invoke_component('rules_budget_provider_has_accepted', $info->account, $info->entityform);
+
+      $lang = key($info->account->field_honorific);
+      $honorific = ($info->account->field_honorific[$lang][0]['value'] == 'male') ? 'Cher Monsieur' : 'Chère Madame';
+      $name = $info->account->realname;
+      drupal_set_message(t('@honorific @name, you have successfully accepted the request.', array('@honorific' => $honorific, '@name' => $name)));
+
+      $lang = key($info->entityform->field_honorific);
+      $honorific = ($info->entityform->field_honorific[$lang][0]['value'] == 'male') ? 'Monsieur' : 'Madame';
+      $lang = key($info->entityform->field_prenom);
+      $name = $info->entityform->field_prenom[$lang][0]['safe_value'];
+      $lang = key($info->entityform->field_name);
+      $name .= ' '. $info->entityform->field_name[$lang][0]['safe_value'];
+      drupal_set_message(t('Please contact @honorific @name with your proposal.', array('@honorific' => $honorific, '@name' => $name)));
+      break;
+  }
+}
+
+
+
+
+
+
+/**
+ * Implements hook_user_login().
+ */
+/*function my_module_user_login(&$edit, $account) {
+  // $edit is empty with one time login
+  if (!empty($edit)) {
+    $_GET['destination'] = 'some-url';
+  }
+  // Or the form id is the password reset form
+  if ($_POST['form_id'] != 'user_pass_reset') {
+    $_GET['destination'] = 'some-url';
+  }
+}*/
+
+
+
+
+
+
+
+
+
+
+/**
+ * Implements hook_cron_job_scheduler_info().
+ */
+function trois_devis_cron_job_scheduler_info() {
+  $info = array();
+  $info['trois_devis_reset_task'] = array(
+    'worker callback' => 'trois_devis_reset_monthly_count',
+  );
+  $info['trois_devis_check_budget_task'] = array(
+    'worker callback' => 'trois_devis_check_budget',
+  );
+  return $info;
+}
+
+/**
+ * Scheduler function for the reset monthly count.
+ */
+function trois_devis_reset_monthly_count() {
+  // Update contacted.
+  db_update('field_data_field_contacted_this_month')
+    ->fields(array(
+      'field_contacted_this_month_value' => 0,
+    ))
+    ->execute();
+  
+  // Update accepted.
+  db_update('field_data_field_accepted_this_month')
+    ->fields(array(
+      'field_accepted_this_month_value' => 0,
+    ))
+    ->execute();
+  
+  // Message on watchdog and send email to support.
+  watchdog('devis', 'Provider monthly count has been reset.');
+  trois_devis_reset_monthly_count_mail_send();
+}
+
+/**
+ * Implements hook_mail().
+ *
+ * Good information on sending emails: 
+ * http://cgit.drupalcode.org/examples/plain/email_example/email_example.module?id=refs/heads/7.x-1.x
+ *
+ * Good info on changing the theme of the mail:
+ * http://drupal.stackexchange.com/questions/54996/how-to-use-drupal-mail-to-send-emails-with-custom-template
+ */
+function trois_devis_mail($key, &$message, $params) {
+  global $user;
+  switch ($key) {
+    case 'reset_monthly_count':
+      $message['headers'] += $params['headers'];
+      $message['subject'] = t('Admin - Provider monthly count has been reset.');
+      $message['body'][] = t('Dear support,');
+      $message['body'][] = '';
+      $message['body'][] = t('The provider monthly count has been reset.');
+      $message['body'][] = '';
+      $message['body'][] = t('This is just a notification, you don\'t have to do anything.');
+      break;
+    
+    case 'check_budget':
+      $message['headers'] += $params['headers'];
+      $message['subject'] = t('Admin - New providers contacted for budgets.');
+      $message['body'][] = t('Dear support,');
+      $message['body'][] = '';
+      $message['body'][] = t('Budgets have been checked and new providers have been contacted, check the information bellow:');
+      $message['body'][] = '';
+      foreach ($params['lines'] as $line) {
+        $message['body'][] = $line;
+      }
+      $message['body'][] = '';
+      $message['body'][] = t('This is just a notification, you don\'t have to do anything.');
+      break;
+  }
+}
+
+/**
+ * Sends an e-mail regarding the reset of the monthly count.
+ */
+function trois_devis_reset_monthly_count_mail_send() {
+  $to = 'support@3devis.be';
+  $from = variable_get('site_mail', 'info@3devis.be');
+  $params['headers'] = array(
+    'Bcc' => 'sent@3devis.be',
+  );
+  $result = drupal_mail('trois_devis', 'reset_monthly_count', $to, LANGUAGE_NONE, $params, $from, TRUE);
+  if ($result['result'] == TRUE) {
+    watchdog('devis', 'Provider monthly count mail has been sent to support.');
+  }
+  else {
+    watchdog('devis', 'Provider monthly count mail has NOT been sent to support.', NULL, WATCHDOG_ALERT);
+  }
+}
+
+/**
+ * Scheduler function for the check budget.
+ */
+function trois_devis_check_budget() {
+  
+  return TRUE;
+  
+  // Check budgets that are between 2 and 3 days old, that haven't been contacted.
+  $query = "
+    SELECT entityform_id, date, uid, contacted
+    FROM devis_provider_assoc
+    WHERE contacted BETWEEN UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 3 DAY)) AND UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 2 DAY))
+      AND checked = 0";
+  $result = db_query($query, array())->fetchAll();
+  
+  $check_me = $cache_me = array();
+  if ($result) {
+    foreach ($result as $arg) {
+      $cache_me[$arg->entityform_id][$arg->uid] = $arg->uid;
+      
+      // If the provider hasn't checked the budget, then check the budget.
+      if (!$arg->date) {
+        $check_me[$arg->entityform_id][$arg->uid] = $arg->uid;
+      }
+      
+      // Set all the providers as checked, to avoid checking again the same ones.
+      db_update('devis_provider_assoc')
+        ->fields(array(
+          'checked' => 1
+        ))
+        ->condition('entityform_id', $arg->entityform_id)
+        ->condition('uid', $arg->uid)
+        ->execute();
+    }
+  }
+  $contacted = array();
+  foreach ($check_me as $entityform_id => $providers) {
+    $entityform = entityform_load($entityform_id);
+    $view = views_get_view('provider');
+    $view->set_display('accountants_to_contact');
+
+    // Set the arguments to pass.
+    $lang = key($entityform->field_legal_status);
+    $legal_status = $entityform->field_legal_status[$lang][0]['value'];
+
+    $lang = key($entityform->field_adresse);
+    $postal_code = $entityform->field_adresse[$lang][0]['postal_code'];
+    $code = trois_devis_get_region_by_postal_code($postal_code) .'+BEL';
+    $view->set_arguments(array($legal_status, $code));
+
+    // Maximum amount of providers to show.
+    $view->set_items_per_page(0);
+    $view->pre_execute();
+    $view->execute();
+
+    // Get the query and execute it to see the providers.
+    $query = trois_devis_dpq($view->build_info['query']);
+    $res = db_query($query)->fetchAll();
+    foreach ($res as $view_result) {
+      // If the found provider has been already contacted, skip.
+      if (array_key_exists($view_result->uid, $cache_me[$entityform_id])) {
+        continue;
+      }
+      // Contact new provider.
+      $account = user_load($view_result->uid);
+      $contacted[] = 'Budget: '. l($entityform_id, 'entityform/'. $entityform_id) .' - User: '. l($account->realname, 'user/'. $account->uid);
+      
+      // Rules takes care of the rest.
+      rules_invoke_component('rules_budget_check_contact_provider', $account, $entityform);
+    }
+  }
+  
+  // If indeed a budget was checked and a provider was contacted.
+  $count = count($cache_me);
+  if ($count && $contacted) {
+    $lines = array();
+    $lines[] = format_plural($count, '1 budget checked.', '@count budgets checked.') .' '. format_plural(count($contacted), '1 new provider contacted.', '@count new providers contacted.');
+    $lines[] = '';
+    foreach ($contacted as $msg) {
+      $lines[] = $msg;
+    }
+    watchdog('devis', '@lines', array('@lines' => implode($lines, '<br />')));
+    trois_devis_check_budget_mail_send($lines);
+  }
+  else {
+    watchdog('devis', 'Budgets checked, no one to contact.');
+  }
+}
+
+/**
+ * This is a copy of devel dpq function as I needed for trois_devis.
+ */
+function trois_devis_dpq($query) {
+  if (method_exists($query, 'preExecute')) {
+    $query->preExecute();
+  }
+  $sql = (string) $query;
+  $quoted = array();
+  $connection = Database::getConnection();
+  foreach ((array) $query->arguments() as $key => $val) {
+    $quoted[$key] = $connection->quote($val);
+  }
+  return strtr($sql, $quoted);
+}
+
+/**
+ * Sends an e-mail regarding the reset of the monthly count.
+ */
+function trois_devis_check_budget_mail_send($lines = array()) {
+  $to = 'support@3devis.be';
+  $from = variable_get('site_mail', 'info@3devis.be');
+  $params['headers'] = array(
+    'Bcc' => 'sent@3devis.be',
+  );
+  $params['lines'] = $lines;
+  $result = drupal_mail('trois_devis', 'check_budget', $to, LANGUAGE_NONE, $params, $from, TRUE);
+  if ($result['result'] == TRUE) {
+    watchdog('devis', 'Budget check mail has been sent to support.');
+  }
+  else {
+    watchdog('devis', 'Budget check mail has NOT been sent to support.', NULL, WATCHDOG_ALERT);
+  }
+}
+
+/** 
+ * Check if a given user is fully active. It checks that it has
+ * a valid credit card that is default and not expired. It checks
+ * also that it has a valid license and that is a provider.
+ */
+function _trois_devis_user_is_able($uid) {
+  $query = "
+    SELECT u.uid
+    FROM users u
+    INNER JOIN users_roles ur ON u.uid = ur.uid
+    INNER JOIN commerce_cardonfile c ON u.uid = c.uid
+    INNER JOIN commerce_license l ON u.uid = l.uid
+    INNER JOIN field_data_field_account_activity_status s ON u.uid = s.entity_id AND (s.entity_type = 'user' AND s.deleted = '0')
+    WHERE ur.rid = 4
+      AND (u.status <> 0 AND u.login <> 0 AND u.access <> 0 AND u.pass <> '')
+      AND c.status = 1
+      AND c.instance_default <> '0'
+      AND DATEDIFF(CONCAT_WS('-', c.card_exp_year, LPAD(c.card_exp_month, 2, '0'), '01'), NOW()) > 0
+      AND l.status = 2
+      AND s.field_account_activity_status_value = 1
+      AND u.uid = :uid
+  ";
+  $uid = db_query($query, array(':uid' => $uid))->fetchField();
+  return $uid;
+}
+
+/**
+ * Delete the user from the reminder table as it is no longer necessary.
+ */
+function _trois_devis_user_registered($account) {
+  db_delete('devis_provider_reminder')
+    ->condition('uid', $account->uid)
+    ->execute();
+}
+
+/**
+ * This is to check if a user has a valid, default not expired credit card.
+ */
+function _trois_devis_user_has_valid_credit_card($uid) {
+  $stored_cards = commerce_cardonfile_load_multiple_by_uid($uid, NULL, TRUE);
+  foreach ($stored_cards as $card) {
+    if (commerce_cardonfile_validate_card_expiration($card)) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+/**
+ * Create the unique id and insert data in the db for viewing the info about the request.
+ * Used in rules: rules_budget_request_approval_new.
+ */
+function trois_devis_create_hash($entity, $account = null, $time = 0) {
+  $key = variable_get('trois_devis_hash_key', '');
+  $rand = substr(str_shuffle(md5(microtime())), 0, 30);
+  $string = $entity->entityform_id . $key . $rand;
+  if ($account) $string .= $account->uid;
+  
+  $hash = md5($string);
+  $hash_accept = md5($string . 'accept');
+  
+  // Give more or less time depending on the day it's beeing accepted.
+  $new_time = ($time) ? $time : REQUEST_TIME;
+  $day_of_the_week = date('w', $new_time);
+  $days = 2;
+  // Thursday & Friday  
+  if ($day_of_the_week == 4 || $day_of_the_week == 5) {
+    $days = 4;
+  }
+  // Saturday & Sunday.
+  elseif ($day_of_the_week == 6 || $day_of_the_week == 0) {
+    $days = 3;
+  }
+  if (!$account) $days += 1;
+  $until_time = $new_time + ($days * 24 * 60 * 60);
+    
+  db_insert('devis_provider_assoc')
+    ->fields(array(
+      'entityform_id' => $entity->entityform_id,
+      'uid' => ($account) ? $account->uid : 0,
+      'url_info' => $hash,
+      'url_accept' => $hash_accept,
+      'contacted' => $new_time,
+      'until_date' => $until_time,
+    ))
+    ->execute();
+  
+  return array('url_info' => $hash, 'url_accept' => $hash_accept);
+}
+
+/**
+ * Gets the information related to the given hash, if exists.
+ */
+function _trois_devis_get_info($hash, $accept = FALSE) {
+  $field = (!$accept) ? 'url_info' : 'url_accept';
+  // TIMESTAMPDIFF(MINUTE, FROM_UNIXTIME(`contacted`), NOW()) as min_since_contacted, 
+  $query = "
+    SELECT entityform_id, uid, url_info, url_accept,
+      contacted, until_date,
+      TIMESTAMPDIFF(MINUTE, NOW(), FROM_UNIXTIME(`until_date`)) as min_left
+    FROM {devis_provider_assoc} 
+    WHERE ". $field ." = :url_info
+  ";
+  $info = db_query($query, array(':url_info' => $hash))->fetchObject();
+  return $info;
+}
+
+/**
+ * Gets the hash related to the given entity and user, if exists.
+ */
+function _trois_devis_get_hash($entityform_id, $uid = 0, $accept = FALSE) {
+  $field = (!$accept) ? 'url_info' : 'url_accept';
+  $query = "SELECT ". $field ." FROM {devis_provider_assoc} WHERE entityform_id = :entityform_id AND uid = :uid";
+  $url = db_query($query, array(':entityform_id' => $entityform_id, ':uid' => $uid))->fetchField();
+  return ($url) ? $url : '';
+}
+
+function _trois_devis_is_request_valid($info, &$message = '') {
+  $data = trois_devis_entity_get_hash_list($info->entityform_id);
+  $anonymous = user_is_anonymous();
+  
+  // Useful links.
+  $url = l(t('Espace fournisseur'), 'user/'. $info->uid);
+  $url_d = l(t('My requests'), 'user/'. $info->uid .'/demandes');
+  if ($anonymous) {
+    $url_d = l(t('My requests'), 'user/login', array('query' => array('destination' => 'user/'. $info->uid .'/demandes')));
+  }
+  $links = '<p>'. $url .' | '. $url_d .'</p>';
+  
+  $register = url('eform/submit/devenir', array('fragment' => 'void'));
+  $message2 = t('We invite you to <a href="@register">register</a> in order to receive in priority new budget requests.', array('@register' => $register));
+  
+  // Check if the provider already accepted.
+  if ($data[$info->uid]->date) {
+    drupal_set_message(t('You already accepted this budget request.'));
+    drupal_goto('devis_info/'. $data[$info->uid]->url_info);
+    return FALSE;
+  }
+  // Check if the request time is expired.
+  if ($data[$info->uid]->min_left < 0) {
+    $message = '<p>'. t('The time to accept this request has expired.') .'</p>';
+    $message .= ($anonymous) ? ('<p>'. $message2 .'</p>') : $links;
+    return FALSE;
+  }
+  // Check if already 5 providers accepted.
+  $checked = 0;
+  foreach ($data as $check_me) {
+    if ($check_me->date) $checked++;
+    if ($checked >= 5) {
+      $message = t('The maximum allowed responses for this request has been reached.');
+      $message .= ($anonymous) ? ('<p>'. $message2 .'</p>') : $links;
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/**
+ * Gets all the data related to a given user.
+ */
+function trois_devis_user_get_hash_list($uid) {
+  $query = "
+    SELECT entityform_id, contacted, opened_date, date, url_accept, url_info 
+    FROM {devis_provider_assoc} 
+    WHERE uid = :uid
+  ";
+  return db_query($query, array(':uid' => $uid))->fetchAllAssoc('entityform_id');
+}
+
+/**
+ * Gets all the data related to a given entityform.
+ */
+function trois_devis_entity_get_hash_list($entityform_id) {
+  $query = "
+    SELECT uid, contacted, until_date, opened_date, date, url_accept, url_info, 
+      TIMESTAMPDIFF(MINUTE, NOW(), FROM_UNIXTIME(`until_date`)) as min_left
+    FROM {devis_provider_assoc} 
+    WHERE entityform_id = :entityform_id
+  ";
+  return db_query($query, array(':entityform_id' => $entityform_id))->fetchAllAssoc('uid');
+}
+
+/**
+ * Once a budget has been accepted, it adds the usage to the accountant
+ * and updates the data in the database.
+ */
+function _trois_devis_accept_budget($account, $entity) {
+  $license = commerce_license_billing_get_master_license($account->uid);
+  if ($license) {
+    $lang = key($entity->field_legal_status);
+    $legal_status = $entity->field_legal_status[$lang][0]['value'];
+    
+    $lang = key($entity->field_devis_product);
+    $product_id = $entity->field_devis_product[$lang][0]['product_id'];
+    $product = commerce_product_load($product_id);
+    
+    // Add the usage to the account.
+    $usage_group = commerce_license_billing_usage_group($license, $product->sku);
+    $usage_group->addUsage($license->revision_id, 1);
+  }
+}
+
+/**
+ * Gets the group name for counting the usage.
+ */
+function _trois_devis_budget_get_group_name($legal_status, $type = '') {
+  $group_name = 'accountant_budget_society';
+  switch ($legal_status) {
+    case 'society':
+      $group_name = 'accountant_budget_society';
+      break;
+    
+    case 'independent':
+      $group_name = 'accountant_budget_independent';
+      break;
+    
+    case 'independent_comp':
+      $group_name = 'accountant_budget_independent_comp';
+      break;
+    
+    case 'association':
+      $group_name = 'accountant_budget_association';
+      break;
+    
+    case 'nonexistent':
+      $group_name = 'accountant_budget_nonexistent';
+      break;
+    
+    case 'independent_plan':
+      $group_name = 'accountant_budget_independent_plan';
+      break;
+  }
+  return $group_name;
+}
+
+function trois_devis_get_product_from_status($legal_status) {
+  $product_key = '';
+  switch ($legal_status) {
+    case 'society':
+      $product_key = 'compt_soc';
+      break;
+    
+    case 'independent':
+      $product_key = 'compt_indep';
+      break;
+    
+    case 'independent_comp':
+      $product_key = 'compt_indep_comp';
+      break;
+    
+    case 'association':
+      $product_key = 'compt_asoc';
+      break;
+    
+    case 'nonexistent':
+      $product_key = 'compt_soc_for';
+      break;
+    
+    case 'independent_plan':
+      $product_key = 'compt_indep_plan';
+      break;
+  }
+  return $product_key;
+}
+
+function trois_devis_user_has_address_set($uid, $type) {
+  $profile_id = commerce_addressbook_get_default_profile_id($uid, $type);
+  $profile = commerce_customer_profile_load($profile_id);
+  $lang = key($profile->field_is_new);
+  return (!$profile->field_is_new[$lang][0]['value']);
+  
+  $lang = key($profile->commerce_customer_address);
+  if (isset($profile->commerce_customer_address[$lang][0]['postal_code'])) {
+    return (!empty($profile->commerce_customer_address[$lang][0]['postal_code'])) ? TRUE : FALSE;
+  }
+  return FALSE;
+}
+
+/**
+ * Given a postal code $code, it determines the region where it is.
+ *
+ * @param $code
+ *  The code to perform the search.
+ * @return
+ *  The region code in three letters.
+ */
+function trois_devis_get_region_by_postal_code($code) {
+  // Correccion de codigos postales, aunque ya los corrige el modulo.
+  $code = filter_var($code, FILTER_SANITIZE_NUMBER_INT);
+  $code = str_replace(array('+', '-'), '', $code);
+  // 1000–1299: Brussels Capital Region
+  if (1000 <= $code && $code <= 1299) {
+    return 'BRU';
+  }
+  // 1300–1499: Walloon Brabant
+  if (1300 <= $code && $code <= 1499) {
+    return 'WBR';
+  }
+  // 1500–1999: Flemish Brabant
+  // 3000–3499: Flemish Brabant (continued)
+  if ((1500 <= $code && $code <= 1999) || (3000 <= $code && $code <= 3499)) {
+    return 'VBR';
+  }
+  // 2000–2999: Antwerp
+  if (2000 <= $code && $code <= 2999) {
+    return 'VAN';
+  }
+  // 3500–3999: Limburg
+  if (3500 <= $code && $code <= 3999) {
+    return 'VLI';
+  }
+  // 4000–4999: Liège
+  if (4000 <= $code && $code <= 4999) {
+    return 'WLG';
+  }
+  // 5000–5999: Namur
+  if (5000 <= $code && $code <= 5999) {
+    return 'WNA';
+  }
+  // 6000–6599: Hainaut
+  // 7000–7999: Hainaut (continued)
+  if ((6000 <= $code && $code <= 6599) || (7000 <= $code && $code <= 7999)) {
+    return 'WHT';
+  }
+  // 6600–6999: Luxembourg
+  if (6600 <= $code && $code <= 6999) {
+    return 'WLX';
+  }
+  // 8000–8999: West Flanders
+  if (8000 <= $code && $code <= 8999) {
+    return 'VWV';
+  }
+  // 9000–9999: East Flanders
+  if (9000 <= $code && $code <= 9999) {
+    return 'VOV';
+  }
+  return 'BEL';
+}
+
+function trois_devis_get_accountants_to_contact($entityform) {
+  $lang = key($entityform->field_legal_status);
+  $legal_status = $entityform->field_legal_status[$lang][0]['value'];
+
+  $lang = key($entityform->field_adresse);
+  $postal_code = $entityform->field_adresse[$lang][0]['postal_code'];
+  $regions = trois_devis_get_region_by_postal_code($postal_code) .'+BEL';
+
+  return views_get_view_result('provider', 'accountants_to_contact_new', $legal_status, $regions);
+}
+
+/**
+ * Insert the provider into the reminder table for send 
+ * communications after 24h, after 48h and after 168h (a week).
+ * Used in rules: rules_become_accountant_approval.
+ */
+function trois_devis_insert_provider_in_reminder_table($uid) {
+  if ($uid) {
+    db_insert('devis_provider_reminder')
+      ->fields(array(
+        'uid' => $uid,
+        'contacted' => REQUEST_TIME,
+      ))
+      ->execute();
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Given an entityform, calculates the price and currency for it,
+ * so to display providers the information.
+ * This function is used in rules: rules_budget_provider_has_accepted
+ */
+function trois_devis_get_entityform_price($entityform) {
+  $lang = key($entityform->field_devis_product);
+  $product_id = $entityform->field_devis_product[$lang][0]['product_id'];
+  $product = commerce_product_load($product_id);
+  if ($product) {
+    $price = commerce_product_calculate_sell_price($product);
+    return commerce_currency_format($price['amount'], $price['currency_code'], $product);
+  }
+  return t('Undefined');
+}
+
+/**
+ * Gets the HTML template for an entityform request to be displayed
+ * on the email of the provider or potential provider.
+ *
+ * used in rules: rules_budget_request_approval_new
+ *
+ * @param Object $entityform the entityform.
+ * @param Object $account the account of the provider if any. Default to null.
+ * @param bool $mailchimp TRUE if displaying for mailchimp. Default to FALSE.
+ * @param bool $plain_text TRUE if displaying plain text. Default to FALSE.
+ * @return string the HTML code for the email.
+ */
+function trois_devis_create_entityform_template($entityform, $account = NULL, $mailchimp = FALSE, $plain_text = FALSE) {
+  $lines = array();
+  global $base_url;
+  
+  $hash = _trois_devis_get_hash($entityform->entityform_id, (!is_null($account)) ? $account->uid : 0, TRUE);
+  $info = _trois_devis_get_info($hash, TRUE);
+  $site_name = variable_get('site_name', '3devis');
+  
+  // If using mailchimp, we add the logo to the top.
+  if ($mailchimp) {
+    // Logo.
+    $alt = t('@site_name | Les meilleurs fournisseurs en Belgique', array('@site_name' => $site_name));
+    $img_url = $base_url .'/sites/default/files/comptable-fiscaliste-bruxelles-mail.png';
+    $lines[] = '
+      <table style="width: 100%;">
+        <tbody style="text-align: center">
+          <tr class="nohover">
+            <td>
+              <a href="http://3devis.be" target="_blank" rel="noreferrer">
+                <img alt="'. $alt .'" src="'. $img_url .'" height="51" width="140">
+              </a>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    ';
+  }
+  
+  // Salutation.
+  $dear = t('Bonjour');
+  $name = '';
+  if (!is_null($account)) {
+    $field = field_get_items('user', $account, 'field_name');
+    $last_name = render(field_view_value('user', $account, 'field_name', $field[0], array()));
+    
+    $field = field_get_items('user', $account, 'field_honorific');
+    $honorific = render(field_view_value('user', $account, 'field_honorific', $field[0], array()));
+    
+    $dear  = ($field[0]['value'] == 'male') ? t('Cher') : t('Chère');
+    $name  = ' '. $honorific .' '. $last_name;
+  }
+  $lines[] = $dear . $name . ',';
+  $lines[] = '';
+  
+  // Client information.
+  $field = field_get_items('entityform', $entityform, 'field_prenom');
+  $first_name = render(field_view_value('entityform', $entityform, 'field_prenom', $field[0], array()));
+  $field = field_get_items('entityform', $entityform, 'field_name');
+  $last_name = ucfirst(substr(render(field_view_value('entityform', $entityform, 'field_name', $field[0], array())), 0, 1));
+  $name = $first_name .' '. $last_name .'.';
+  $lines[] = t('@name needs a budget for accounting.', array('@name' => $name));
+  $lines[] = '';
+  $lines[] = t('Click "See the request" bellow to receive further details.');
+  $lines[] = '';
+  
+  // Information.
+  $title_name = t("Budget request from @name", array('@name' => $name));
+  $style_table = 'class="request"';
+  $style_span = 'class="span-desc"';
+  if ($mailchimp) {
+    $style_table = 'style="
+      border-collapse: separate; 
+      border-spacing: 0px; 
+      table-layout: fixed;
+      width: 100%;
+      border: 1px solid #E0E0E0; 
+      border-bottom: none; 
+      border-top-left-radius: 5px; 
+      border-top-right-radius: 5px;
+    "';
+    $style_span = 'style="font-weight: bold; color: #6F868E; margin-bottom: 5px;"';
+  }
+  $lines[] = '
+    <table '. $style_table .'>
+      <tbody>
+        <tr class="nohover">
+          <td style="padding: 40px 10% 0;">
+            <table style="width: 100%; text-align: center;">
+              <tbody>
+                <tr class="nohover" style="text-align: center; background-color: #f5f5f5;">
+                  <td>
+                    <h3 style="margin: 1em 0; text-align: center;">'. $title_name .'</h3>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </td>
+        </tr>
+        <tr class="nohover" style="text-align: left;">
+          <td style="padding: 0 10%;">
+            <table style="width: 100%; text-align: left;">
+              <tbody>
+                <tr class="nohover">
+                  <td>
+  ';
+  
+  $field = field_get_items('entityform', $entityform, 'field_legal_status');
+  $lines[] = '<span '. $style_span .'>'. t('Statut juridique') .':</span>';
+  $lines[] = render(field_view_value('entityform', $entityform, 'field_legal_status', $field[0], array()));
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_desired_benefits');
+  $lines[] = '<span '. $style_span .'>'. t('Prestations souhaitées') .':</span>';
+  $lines[] = render(field_view_value('entityform', $entityform, 'field_desired_benefits', $field[0], array()));
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_info_extra');
+  if (trim($field[0]['value'])) {
+    $lines[] = '<span '. $style_span .'>'. t("Plus d'information concernant la demande") .':</span>';
+    $lines[] = render(field_view_value('entityform', $entityform, 'field_info_extra', $field[0], array()));
+    $lines[] = '';
+  }
+  
+  $field = field_get_items('entityform', $entityform, 'field_activity');
+  $lines[] = '<span '. $style_span .'>'. t('Activité ou profession') .':</span>';
+  $lines[] = render(field_view_value('entityform', $entityform, 'field_activity', $field[0], array()));
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_annual_revenue');
+  $lines[] = '<span '. $style_span .'>'. t("Chiffre d'affaires") .':</span>';
+  if ($field[0]['value'] != 'nonexistent') {
+    $lines[] = render(field_view_value('entityform', $entityform, 'field_annual_revenue', $field[0], array()));
+  }
+  else {
+    $field = field_get_items('entityform', $entityform, 'field_estimated_annual_revenue');
+    $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_annual_revenue', $field[0], array())) . ' €';
+  }
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_annual_invoice');
+  $lines[] = '<span '. $style_span .'>'. t("Nombre annuel de factures d'achat et de vente à traiter") .':</span>';
+  if ($field[0]['value'] != 'nonexistent') {
+    $lines[] = render(field_view_value('entityform', $entityform, 'field_annual_invoice', $field[0], array()));
+  }
+  else {
+    $field = field_get_items('entityform', $entityform, 'field_estimated_annual_invoice');
+    $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_annual_invoice', $field[0], array()));
+  }
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_number_employees');
+  $lines[] = '<span '. $style_span .'>'. t('Taille de la structure (salariés + administrateurs)') .':</span>';
+  if ($field[0]['value'] != 'nonexistent') {
+    $lines[] = render(field_view_value('entityform', $entityform, 'field_number_employees', $field[0], array()));
+  }
+  else {
+    $field = field_get_items('entityform', $entityform, 'field_estimated_number_employees');
+    $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_number_employees', $field[0], array()));
+  }
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_has_accountant');
+  $lines[] = '<span '. $style_span .'>'. t('Le client a déjà un cabinet comptable?') .':</span>';
+  $lines[] = render(field_view_value('entityform', $entityform, 'field_has_accountant', $field[0], array()));
+  $lines[] = '';
+  
+  // If it has an accountant.
+  if ($field[0]['value']) {
+    $lines[] = '<span '. $style_span .'>'. t('Raison pour changer de cabinet comptable') .':</span>';
+    
+    $field = field_get_items('entityform', $entityform, 'field_change_accountant_reason');
+    if ($field[0]['value'] != 'other') {
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_change_accountant_reason', $field[0], array()));
+    }
+    else {
+      $field = field_get_items('entityform', $entityform, 'field_change_accountant_other');
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_change_accountant_other', $field[0], array()));
+    }
+    $lines[] = '';
+  }
+  
+  $lang = key($entityform->field_adresse);
+  $lines[] = '<span '. $style_span .'>'. t('Ville et code postal') .':</span>';
+  $lines[] = ucfirst(strtolower($entityform->field_adresse[$lang][0]['locality'])) .', '. $entityform->field_adresse[$lang][0]['postal_code'];
+  $lines[] = '';
+  
+  $url = $base_url .'/devis_accept/'. $hash;
+  $style_table = $style_td = $style_a = 'class="button"';
+  $style_small = 'class="small"';
+  if ($mailchimp) {
+    $style_table = 'style="
+      border-collapse: separate; 
+      border-spacing: 0px; 
+      table-layout: fixed; 
+      text-align: center; 
+      width: 100%; 
+      border: 1px solid #E0E0E0; 
+      border-bottom-left-radius: 5px; 
+      border-bottom-right-radius: 5px;
+    "';
+    $style_td = 'style="
+      text-align: center; 
+      background-color: #FFB500; 
+      border-width: 1px; 
+      border-style: solid; 
+      border-radius: 0.2rem; 
+      padding: 13px 0; 
+      text-decoration: none; 
+      letter-spacing: 1px;
+    "';
+    $style_a = 'style="color: white; text-decoration: none; font-size: 16px; font-weight: bold;"';
+    $style_small = 'style="font-size: 12px"';
+  }
+  
+  $date = '<strong>'. format_date($info->until_date, 'long') .'</strong>';
+  $info_time = t('You have until !date to see the personal information of @name and reply to this budget request.', array('!date' => $date, '@name' => $name));
+  
+  $link = ($plain_text) ? t('Request link: @link', array('@link' => $url)) : '<a '. $style_a .' href="'. $url .'" target="_blank" rel="noreferrer">'. t('See the request') .'</a>';
+  $lines[] = '
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <table '. $style_table .'>
+      <tbody>
+        <tr class="nohover">
+          <td style="padding: 40px 10%;">
+            <table style="width: 100%; text-align: center;">
+              <tbody>
+                <tr class="nohover">
+                  <td style="padding: 0 10%;">
+                    <table style="width: 100%; text-align: center;">
+                      <tbody>
+                        <tr class="nohover">
+                          <td '. $style_td .'>
+                            '. $link .'
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </td>
+                </tr>'. ((!$plain_text) ? '
+                <tr class="nohover">
+                  <td>
+                    <br /><span '. $style_small .'>'. t('You can also see the request by following this link:') .' 
+                      <a href="'. $url .'" target="_blank" rel="noreferrer">'. $url .'</a>
+                    </span>
+                  </td>
+                </tr>
+                <tr class="nohover">
+                  <td>
+                    <br /><span '. $style_small .'>'. $info_time .'</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  ' : '');
+  $lines[] = '';
+  $lines[] = t('Cordialement') .',';
+  $lines[] = '';
+  $lines[] = t("L'équipe de @site_name", array('@site_name' => $site_name));
+  
+  return (!$plain_text) ? implode($lines, '<br />') : strip_tags(implode($lines, "\n"));
+}
+
+/**
+ * Gets the printable version of the provider for the client requesting
+ * a budget.
+ * This function is used in rules: rules_budget_request_approval
+ */
+function trois_devis_get_user_name_for_email_to_client($user, $html = TRUE) {
+  if (!$user) return '';
+  $lines = array();
+  $company = $website = '';
+  
+  // Company.
+  $lang = key($user->field_company_name);
+  if (isset($user->field_company_name[$lang][0]['safe_value'])) {
+    $company = $user->field_company_name[$lang][0]['safe_value'];
+    $lines[] = (($company) ? $company : $user->realname);
+  }
+  
+  // Address.
+  $lang = key($user->field_adresse);
+  if (isset($user->field_adresse[$lang][0])) {
+    $address = $user->field_adresse[$lang][0];
+    $lines[] = $address['thoroughfare'] .', '. $address['postal_code'] .', '. $address['locality'];
+  }
+  
+  // Phone.
+  $lang = key($user->field_phone_belgium);
+  if (isset($user->field_phone_belgium[$lang][0]['value'])) {
+    $lines[] = t('Tél') .' : '. $user->field_phone_belgium[$lang][0]['value'];
+  }
+  
+  // Website.
+  $lang = key($user->field_website);
+  if (isset($user->field_website[$lang][0]['url'])) {
+    $web = $user->field_website[$lang][0]['url'];
+    $pos = strpos($web, 'http://');
+    $url = ($pos === false) ? 'http://'. $web : $web;
+    $website = l($user->field_website[$lang][0]['url'], $url, array('attributes' => array('external' => TRUE, 'absolute' => TRUE))); 
+    $lines[] = ($website) ? $website : '';
+  }
+  
+  $lang = key($user->field_staff_number);
+  if (isset($user->field_staff_number[$lang][0]['value'])) {
+    $lines[] = t('Nombre de collaborateurs') .' : '. $user->field_staff_number[$lang][0]['value'];
+  }
+  
+  $lang = key($user->field_number_ipcf_iec);
+  if (isset($user->field_number_ipcf_iec[$lang][0]['value'])) {
+    $lines[] = t('N° membre IPCF/IEC') .'* : '. $user->field_number_ipcf_iec[$lang][0]['value'];
+  }
+  
+  $return = implode('<br />', $lines);
+  if (!$html) {
+    $return = str_ireplace('<br />', "\r\n", $return);
+    $return = strip_tags($return) ."\r\n";
+  }
+  return $return;
+}
+
+/**
+ * Gets the printable version ID of an entityform for the clients.
+ * This function is used in rules.
+ */
+function trois_devis_get_entityform_print_id($entityform) {
+  return date('Ym', $entityform->created) . str_pad($entityform->entityform_id, 5, '0', STR_PAD_LEFT);
+}
+
+/**
+ * This is taken from the phone module.
+ *
+ * Verifies that $phonenumber is valid
+ *
+ * @param string $phonenumber
+ * @return boolean Returns boolean FALSE if the phone number is not valid.
+ */
+function trois_devis_valid_be_phone_number($phonenumber) {
+  // define regular expression
+  $regex = "/^(\+32|0)[1-9]\d{7,8}$/i";
+
+  $phonenumber  = str_replace(array(' ','-','(',')'), '', $phonenumber);
+  // return true if valid, false otherwise
+  return (bool) preg_match($regex, $phonenumber);
+}
+
+/**
+ * Given the type of the entityform, determines the label to display
+ * on different interfaces.
+ * @param $type the type of the entityform
+ * @return the label string
+ */
+function trois_devis_get_entityform_label($type, $ucwords = TRUE) {
+  $string = '';
+  switch ($type) {
+    case 'comptable':
+    case 'devenir':
+      $string = 'comptable';
+      break;
+      
+    default:
+      $pieces = explode('_', $type);
+      $string = array_pop($pieces);
+      break;
+  }
+  if ($ucwords) $string = ucwords($string);
+  return t('@type', array('@type' => $string));
+}
+
+function trois_devis_entityform_email_data($entityform, $plain_text = FALSE) {
+  $lines = array();
+  
+  $field = field_get_items('entityform', $entityform, 'field_prenom');
+  $tmp = render(field_view_value('entityform', $entityform, 'field_prenom', $field[0], array()));
+  $honorific = ($tmp == 'male') ? 'Monsieur' : 'Madame';
+  $field = field_get_items('entityform', $entityform, 'field_prenom');
+  $first_name = render(field_view_value('entityform', $entityform, 'field_prenom', $field[0], array()));
+  $field = field_get_items('entityform', $entityform, 'field_name');
+  $last_name = render(field_view_value('entityform', $entityform, 'field_name', $field[0], array()));
+  $lines[] = '<strong>Nom:</strong>';
+  $lines[] = "{$honorific} {$first_name} {$last_name}";
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_email');
+  $lines[] = '<strong>E-mail:</strong>';
+  $lines[] = render(field_view_value('entityform', $entityform, 'field_email', $field[0], array()));
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_phone_belgium');
+  $lines[] = '<strong>Téléphone:</strong>';
+  $lines[] = render(field_view_value('entityform', $entityform, 'field_phone_belgium', $field[0], array()));
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_company_name');
+  $company = render(field_view_value('entityform', $entityform, 'field_company_name', $field[0], array()));
+  $lines[] = '<strong>Société:</strong>';
+  $lines[] = ($company) ? $company : '<em>not specified</em>';
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_tva');
+  $lines[] = '<strong>Numéro de TVA:</strong>';
+  $lines[] = render(field_view_value('entityform', $entityform, 'field_tva', $field[0], array()));
+  $lines[] = '';
+  
+  $field = field_get_items('entityform', $entityform, 'field_adresse');
+  $lines[] = '<strong>Adresse:</strong>'. render(field_view_value('entityform', $entityform, 'field_adresse', $field[0], array()));
+  
+  /*
+  if (isset($entity->field_website['und'][0]['url'])) {
+    $string = $entity->field_website['und'][0]['url'];
+    $pos = strpos($string, 'http://');
+    $url = ($pos === false) ? 'http://'. $string : $string;
+    print l($entity->field_website['und'][0]['url'], $url, array('attributes' => array('external' => TRUE, 'absolute' => TRUE))); 
+  }
+  else {
+    echo '<em>not specified</em>';
+  }
+  */
+  $field = field_get_items('entityform', $entityform, 'field_website');
+  $website = render(field_view_value('entityform', $entityform, 'field_website', $field[0], array()));
+  $lines[] = '<strong>Site web:</strong>';
+  $lines[] = ($website) ? $website : '<em>not specified</em>';
+  $lines[] = '';
+  
+  switch ($entityform->type) {
+    case 'devenir':
+      $field = field_get_items('entityform', $entityform, 'field_staff_number');
+      $lines[] = '<strong>Nombre de collaborateurs:</strong>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_staff_number', $field[0], array()));
+      $lines[] = '';
+      
+      $field = field_get_items('entityform', $entityform, 'field_number_ipcf_iec');
+      $lines[] = '<strong>N° membre IPCF/IEC:</strong>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_number_ipcf_iec', $field[0], array()));
+      $lines[] = '';
+      break;
+      
+    case 'devenir_fournisseur_photographe':
+      $field = field_get_items('entityform', $entityform, 'field_social_link');
+      if ($field) {
+        $lines[] = '<strong>Média social:</strong>';
+        $social_media = array();
+        foreach ($field as $key => $res) {
+          $lines[] = l($res['service'], $res['url'], array('attributes' => array('external' => TRUE, 'absolute' => TRUE))); 
+        }
+        $lines[] = '';
+      }
+      
+      $field = field_get_items('entityform', $entityform, 'field_years_experience');
+      $lines[] = '<strong>Années d’expériences:</strong>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_years_experience', $field[0], array()));
+      $lines[] = '';
+      break;
+  }
+  
+  $field = field_get_items('entityform', $entityform, 'field_promotional_code');
+  $lines[] = '<strong>Code Promotionnel:</strong>';
+  $code = render(field_view_value('entityform', $entityform, 'field_promotional_code', $field[0], array()));
+  $lines[] = (trim($code) == 'NV:' || !$code) ? '<em>not specified</em>' : $code;
+  $lines[] = '';
+  
+  return (!$plain_text) ? implode($lines, '<br />') : strip_tags(implode($lines, "\n"));
+}
+
+/**
+ * This is a fix to a problem when invoicing that the line items are
+ * being substracted by 0.01 EUR. So with this fix we add back that number
+ * based on the product original price.
+ * Used in rules: rules_fix_unvalid_prices
+ */
+function trois_devis_fix_product_price($line_item, $fix = FALSE) {
+  // Load the line item wrapper.
+  $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+  $unit_price = commerce_price_wrapper_value($line_item_wrapper, 'commerce_unit_price', TRUE);
+  
+  // Calculate the sell price of the product.
+  $lang = key($line_item->commerce_product);
+  $product_id = $line_item->commerce_product[$lang][0]['product_id'];
+  $product = commerce_product_load($product_id);
+  $product_price = commerce_product_calculate_sell_price($product);
+  
+  $check = FALSE;
+  if ($unit_price['amount'] != $product_price['amount']) {
+    $check = TRUE;
+    if ($fix) {
+      // Calculate the updated amount and create a price array representing the
+      // difference between it and the current amount.
+      $current_amount = $unit_price['amount'];
+      $updated_amount = $product_price['amount'] * 1;
+
+      $difference = array(
+        'amount' => $updated_amount - $current_amount,
+        'currency_code' => $unit_price['currency_code'],
+        'data' => array(),
+      );
+
+      // Set the amount of the unit price and add the difference as a component.
+      $line_item_wrapper->commerce_unit_price->amount = $updated_amount;
+
+      $line_item_wrapper->commerce_unit_price->data = commerce_price_component_add(
+        $line_item_wrapper->commerce_unit_price->value(),
+        'base_price',
+        $difference,
+        TRUE
+      );
+    }
+  }
+  return $check;
+}
+
+
+
+
+
+function trois_devis_user_view($account, $view_mode, $langcode) {
+  //trois_devis_get_region_by_postal_code('BE-1040');
+  
+  //$entity = entityform_load(362);
+  //trois_devis_create_hash($entity);
+  
+  // See the first login URL for a given user.
+  /*$account = user_load(506);
+  dpm($account, 'account');
+  dpm(user_pass_reset_url($account) .'/login');
+  
+  $string = trois_devis_get_user_name_for_email_to_client($account);
+  dpm($string, 'string');*/
+  
+  // USE THIS TO CORRECT THE USERS BENOIT HALLAK AND MICHELE RENARD.
+  /*if ($account->uid == 2) {
+    $user = user_load(654);
+    dpm($user, 'user');
+    $entity = entityform_load(378);
+    dpm($entity, 'entity');
+    //_trois_devis_accept_budget($user, $entity);
+    //promo_code_add_promo_code_line_item($user);
+    dpm('ACEPTADO NEW!!!');
+  }*/
+  
+
+  /*dpm($account, 'account');
+  $license = commerce_license_billing_get_master_license($account->uid);
+  //dpm($license, 'license');
+  if ($license) {
+    $usage_group = commerce_license_billing_usage_group($license, 'accountant_budget_association');
+    //dpm($usage_group, 'usage group');
+    
+    $usage_group->addUsage($license->revision_id, 1);
+    //dpm('Added usage for user');
+
+    //$default_theme_path = drupal_get_path('theme', variable_get('theme_default', NULL));
+    //dpm($default_theme_path, 'theme path');
+
+    //$billingCycle = commerce_license_billing_get_license_billing_cycle($license);
+    //dpm($billingCycle, 'billingCycle');
+    //$usage = $usage_group->chargeableUsage($billingCycle);
+    //dpm($usage, 'chargeableUsage');
+
+    //$usage_group->addUsage($license->revision_id, 1, REQUEST_TIME, REQUEST_TIME + 1);
+  }*/
+}

@@ -1,0 +1,730 @@
+<?php
+
+/**
+ * @file
+ * Creates promo codes to orders based on rules.
+ */
+
+/*
+ * Implements hook_cron().
+ */
+function promo_code_cron() {
+  // Select orders that are payment pending from now to two days ago.
+  // These orders must have the promo code or credit note and have 0 as total amount.
+  $query = "
+    SELECT DISTINCT(o.order_id) as order_id
+    FROM commerce_order o
+    INNER JOIN commerce_line_item li ON li.order_id = o.order_id
+    WHERE o.status = 'recurring_payment_pending'
+      AND li.line_item_label IN ('credit_note', 'promo_premier')
+      AND o.changed BETWEEN UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 2 DAY)) AND UNIX_TIMESTAMP()
+  ";
+  $result = db_query($query, array())->fetchAll();
+  
+  $queue = DrupalQueue::get('promo_code_inv_cle');
+  foreach ($result as $tmp) {
+    $queue->createItem($tmp->order_id);
+  }
+}
+
+/**
+* Implements hook_views_api().
+*/
+function promo_code_views_api() {
+  return array(
+    'api' => 3,
+    'path' => drupal_get_path('module', 'promo_code') . '/views',
+  );
+}
+
+/**
+ * Implements hook_cron_queue_info().
+ */
+function promo_code_cron_queue_info() {
+  $queues['promo_code_inv_cle'] = array(
+    'worker callback' => 'promo_code_clean_invoice',
+    'time' => 60,
+  );
+  return $queues;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function promo_code_permission() {
+  return array(
+    '3devis see promo code usage' => array(
+      'title' => t('See promo code usage'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_menu().
+ */
+function promo_code_menu() {
+  $items = array();
+  $items['admin/config/content/trois_devis/promo_code'] = array(
+    'title'            => 'Promo Codes',
+    'page callback'    => 'promo_code_list',
+    'access arguments' => array('administer 3devis'),
+    'description'      => 'Promo Codes.',
+    'type'             => MENU_NORMAL_ITEM,
+  );
+  
+  $items['admin/config/content/trois_devis/promo_code/add'] = array(
+    'title'            => 'Add Promotional Code',
+    'page callback'    => 'promo_code_form_wrapper',
+    'access arguments' => array('administer 3devis'),
+    'description'      => 'Add Promo Code.',
+    'type'             => MENU_LOCAL_TASK,
+  );
+  
+  $items['admin/config/content/trois_devis/promo_code/%promo_code'] = array(
+    'title callback' => 'promo_code_title',
+    'title arguments' => array(5),
+    'page callback' => 'promo_code_form_wrapper',
+    'page arguments' => array(5),
+    'access arguments' => array('administer 3devis'),
+    'weight' => 0,
+    'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+  );
+  $items['admin/config/content/trois_devis/promo_code/%promo_code/edit'] = array(
+    'title' => 'Edit',
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+    'weight' => -10,
+    'context' => MENU_CONTEXT_PAGE | MENU_CONTEXT_INLINE,
+  );
+  $items['admin/config/content/trois_devis/promo_code/%promo_code/delete'] = array(
+    'title' => 'Delete',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('promo_code_delete_form', 5),
+    'access arguments' => array('administer 3devis'),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 20,
+    'context' => MENU_CONTEXT_INLINE,
+  );
+  return $items;
+}
+
+/** 
+ * Load promo code.
+ */
+function promo_code_load($cid) {
+  if (empty($cid)) {
+    return FALSE;
+  }
+  return db_query("SELECT * FROM devis_promo_code WHERE cid = :cid", array(':cid' => $cid))->fetchObject();
+}
+
+/** 
+ * Load promo code by name.
+ */
+function promo_code_load_by_name($code) {
+  
+}
+
+/**
+ * Load promo code by user.
+ */
+function promo_code_load_by_user($account) {
+  if (!$account->field_promotional_code) return FALSE;
+  
+  // Check the promo code the user put against the codes in the db.
+  $lang = key($account->field_promotional_code);
+  $user_code = $account->field_promotional_code[$lang][0]['value'];
+  $query = "SELECT * FROM devis_promo_code WHERE code LIKE :code";
+  return db_query($query, array(':code' => db_like($user_code)))->fetchObject();
+}
+
+/** 
+ * Promo code title.
+ */
+function promo_code_title($promo_code) {
+  return t('Promo Code: @code', array('@code' => $promo_code->code));
+}
+
+function promo_code_usage() {
+  $content = '';
+  drupal_set_title('Promo Codes Usage');
+  $headers = array(
+    'cid' => array('data' => t('ID'), 'field' => 'pc.cid'),
+    'code' => array('data' => t('Code'), 'field' => 'pc.code'),
+    'discount' => array('data' => t('Discount'), 'field' => 'pc.discount'),
+    'amount' => array('data' => t('Amount'), 'field' => 'pc.amount'),
+    'date_begin' => array('data' => t('Begin'), 'field' => 'pc.date_begin'),
+    'date_end' => array('data' => t('End'), 'field' => 'pc.date_end'),
+    'enabled' => array('data' => t('Enabled'), 'field' => 'pc.enabled'),
+    'ops' => array('data' => t('Operations')),
+  );
+
+  $query = db_select('devis_promo_code_usage', 'pcu');
+  $query->join('devis_promo_code', 'pc', 'pc.cid = pcu.cid');
+  $query->join('users', 'u', 'pcu.uid = u.uid');
+  $query->extend('TableSort');
+
+  $result = $query->fields('pc', array('cid', 'code', 'discount', 'amount', 'date_begin', 'date_end', 'enabled'))
+    ->orderByHeader($headers)
+    ->execute();
+  
+  $rows = array();
+  foreach ($result as $promo) {
+    $base_url = 'admin/config/content/trois_devis/promo_code/'. $promo->cid;
+    /*$rows[$promo->cid] = array(
+      'cid' => $promo->cid,
+      'code' => $promo->code,
+      'discount' => $promo->discount .' EUR',
+      'amount' => ($promo->amount) ? $promo->amount : 'unlimited',
+      'date_begin' => date('j F Y', $promo->date_begin),
+      'date_end' => date('j F Y', $promo->date_end),
+      'enabled' => ($promo->enabled) ? 'Yes' : 'No',
+      'ops' => l('Edit', $base_url .'/edit', $destination) .' '. l('Delete', $base_url .'/delete', $destination),
+    );*/
+  }
+  $content .= theme(
+    'table', 
+    array(
+      'header' => $headers,
+      'rows' => $rows,
+      'attributes' => array('class' => array('promo_codes')),
+      'empty' => t('No promotions yet.'),
+    )
+  );
+  return $content;
+}
+
+/** 
+ * promo code list.
+ */
+function promo_code_list() {
+  $content = '';
+  $destination = array('query' => array('destination' => 'admin/config/content/trois_devis/promo_code'));
+  $content .= '<p>'. l('Add Promotional Code', 'admin/config/content/trois_devis/promo_code/add', $destination) .'</p>';
+  $headers = array(
+    'cid' => array('data' => t('ID'), 'field' => 'pc.cid'),
+    'code' => array('data' => t('Code'), 'field' => 'pc.code'),
+    'discount' => array('data' => t('Discount'), 'field' => 'pc.discount'),
+    'amount' => array('data' => t('Amount'), 'field' => 'pc.amount'),
+    'date_begin' => array('data' => t('Begin'), 'field' => 'pc.date_begin'),
+    'date_end' => array('data' => t('End'), 'field' => 'pc.date_end'),
+    'enabled' => array('data' => t('Enabled'), 'field' => 'pc.enabled'),
+    'ops' => array('data' => t('Operations')),
+  );
+
+  $query = db_select('devis_promo_code', 'pc')
+    ->extend('TableSort');
+
+  $result = $query->fields('pc', array('cid', 'code', 'discount', 'amount', 'date_begin', 'date_end', 'enabled'))
+    ->orderByHeader($headers)
+    ->execute();
+  
+  $rows = array();
+  foreach ($result as $promo) {
+    $base_url = 'admin/config/content/trois_devis/promo_code/'. $promo->cid;
+    $rows[$promo->cid] = array(
+      'cid' => $promo->cid,
+      'code' => $promo->code,
+      'discount' => $promo->discount / 100 .' EUR',
+      'amount' => ($promo->amount) ? $promo->amount : 'unlimited',
+      'date_begin' => date('j F Y', $promo->date_begin),
+      'date_end' => date('j F Y', $promo->date_end),
+      'enabled' => ($promo->enabled) ? 'Yes' : 'No',
+      'ops' => l('Edit', $base_url .'/edit', $destination) .' '. l('Delete', $base_url .'/delete', $destination),
+    );
+  }
+  $content .= theme(
+    'table', 
+    array(
+      'header' => $headers,
+      'rows' => $rows,
+      'attributes' => array('class' => array('promo_codes')),
+      'empty' => t('No promotions yet.'),
+    )
+  );
+  return $content;
+}
+
+function promo_code_form_wrapper($promo_code = FALSE) {
+  return drupal_get_form('promo_code_form', $promo_code);
+}
+
+/** 
+ * Add/Edit promo code.
+ */
+function promo_code_form($form, &$form_state, $promo_code = FALSE) {
+  $input = $form_state['input'];
+  $form['info'] = array(
+    '#type'          => 'fieldset',
+    '#title'         => t('Promotional Code'),
+    '#description'   => t('Set the promotional code parameters.'),
+    '#collapsible'   => FALSE,
+    '#collapsed'     => FALSE,
+  );
+  $form['info']['code'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Promotional Code'),
+    '#default_value' => ($input['code']) ? $input['code'] : (($promo_code) ? $promo_code->code : ''),
+    '#description'   => t('Set the promotional code.'),
+    '#size'          => 40,
+    '#maxlength'     => 100,
+    '#required'      => TRUE,
+  );
+  $form['info']['discount'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Discount'),
+    '#default_value' => ($input['discount']) ? $input['discount'] : (($promo_code) ? ($promo_code->discount / 100) : ''),
+    '#description'   => t('Set the discount in EUR.'),
+    '#size'          => 10,
+    '#maxlength'     => 10,
+    '#required'      => TRUE,
+  );
+  $form['info']['limit'] = array(
+    '#type'          => 'fieldset',
+    '#title'         => t('Boundaries'),
+    '#description'   => t('Set the promotional code limtis.'),
+    '#collapsible'   => FALSE,
+    '#collapsed'     => FALSE,
+  );
+  $form['info']['limit']['amount'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Amount'),
+    '#default_value' => ($input['amount']) ? $input['amount'] : (($promo_code) ? $promo_code->amount : 0),
+    '#description'   => t('Set the total amount to be allowed to be used. 0 for unlimited.'),
+    '#size'          => 10,
+    '#maxlength'     => 10,
+    '#required'      => TRUE,
+  );
+  $ref = ($promo_code) ? $promo_code->date_begin : time(); 
+  $date_begin = array(
+    'year' => date('Y', $ref), 
+    'month' => date('n', $ref),
+    'day' => date('j', $ref),
+  );
+  $form['info']['limit']['date_begin'] = array(
+    '#type'          => 'date', 
+    '#title'         => t('Start Date'),
+    '#default_value' => $input['date_begin'] ? $input['date_begin'] : $date_begin,
+    '#description'   => t('Set the begin date. This date will be included in the promotion.'),
+    '#required'      => TRUE,
+  );
+  $ref = ($promo_code) ? $promo_code->date_end : time(); 
+  $date_end = array(
+    'year' => date('Y', $ref), 
+    'month' => date('n', $ref),
+    'day' => date('j', $ref),
+  );
+  $form['info']['limit']['date_end'] = array(
+    '#type'          => 'date', 
+    '#title'         => t('End Date'),
+    '#default_value' => $input['date_end'] ? $input['date_end'] : $date_end,
+    '#description'   => t('Set the end date. This date will be included in the promotion.'),
+    '#required'      => TRUE,
+  );
+  $form['info']['enabled'] = array(
+    '#type'          => 'checkbox',
+    '#title'         => t('Enabled'),
+    '#default_value' => $input['enabled'] ? $input['enabled'] : (($promo_code) ? $promo_code->enabled : 1),
+    '#description'   => t('Check to enable the promotion.'),
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+  return $form;
+}
+
+/** 
+ * Promo code validate.
+ */
+function promo_code_form_validate($form, &$form_state) {
+  $val = $form_state['values'];
+  $cid = ($form_state['build_info']['args'][0]) ? $form_state['build_info']['args'][0]->cid : 0;
+  $query = "SELECT cid FROM devis_promo_code WHERE code = :code AND cid <> :cid";
+  $code = db_query($query, array(':code' => $val['code'], ':cid' => $cid))->fetchField();
+  if ($code) {
+    form_set_error('code', t('The specified code already exists.'));
+  }
+  if ($val['discount'] <= 0) {
+    form_set_error('discount', t('The discount must be a positive integer.'));
+  }
+  if ($val['amount'] < 0) {
+    form_set_error('amount', t('The amount must be a positive integer.'));
+  }
+  
+  $date_begin = $val['date_begin']['day'] .'-'. $val['date_begin']['month'] .'-'. $val['date_begin']['year'];
+  $date_end = $val['date_end']['day'] .'-'. $val['date_end']['month'] .'-'. $val['date_end']['year'];
+  $form_state['values']['date_begin_new'] = strtotime($date_begin);
+  $form_state['values']['date_end_new'] = strtotime($date_end);
+  $date1 = new DateTime($date_begin);
+  $date2 = new DateTime($date_end);
+  if ($date1 > $date2) {
+    form_set_error('date_begin', t('The Start Date should be before or equal to the End Date.'));
+  }
+}
+
+/** 
+ * Promo code submit.
+ */
+function promo_code_form_submit($form, &$form_state) {
+  $val = $form_state['values'];
+  $cid = $form_state['build_info']['args'][0]->cid;
+  // Edit the promo.
+  if ($cid) {
+    db_update('devis_promo_code')
+      ->fields(array(
+        'code' => $val['code'],
+        'discount' => $val['discount'] * 100,
+        'amount' => $val['amount'],
+        'date_begin' => $val['date_begin_new'],
+        'date_end' => $val['date_end_new'],
+        'enabled' => $val['enabled'],
+      ))
+      ->condition('cid', $cid)
+      ->execute();
+    drupal_set_message(t('Promotional Code successfully updated.'));
+  }
+  // Add new promo.
+  else {
+    db_insert('devis_promo_code')
+      ->fields(array(
+        'code' => $val['code'],
+        'discount' => $val['discount'] * 100,
+        'amount' => $val['amount'],
+        'date_begin' => $val['date_begin_new'],
+        'date_end' => $val['date_end_new'],
+        'enabled' => $val['enabled'],
+      ))
+      ->execute();
+    drupal_set_message(t('Promotional Code successfully created.'));
+  }
+}
+
+/** 
+ * Delete promo code.
+ */
+function promo_code_delete_form($form, &$form_state, $promo_code) {
+  $form = array();
+  $form['markup'] = array(
+    '#markup' => '<p>'. t('Are you sure you want to delete the Promotional Code: @promo_code', array('@promo_code' => $promo_code->code)) .'</p>',
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Delete'),
+    '#suffix' => l('Cancel', 'admin/config/content/trois_devis/promo_code'),
+  );
+  $usage = db_query(
+    "SELECT COUNT(cid) as count FROM devis_promo_code_usage WHERE cid <> :cid", 
+    array(':cid' => $promo_code->cid)
+  )->fetchObject();
+
+  if ($usage->count) {
+    $form['markup']['#markup'] .= '<p>This promotional code cannot be deleted as it is currently being used.</p>';
+    $form['submit']['#disabled'] = TRUE;
+  }
+  return $form;
+}
+
+/** 
+ * Delete promo code submit.
+ */
+function promo_code_delete_form_submit($form, &$form_state) {
+  db_delete('devis_promo_code')
+    ->condition('cid', $form_state['build_info']['args'][0]->cid)
+    ->execute();
+  drupal_set_message(t('Promotional Code successfully deleted.'));
+}
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * Implements hook_commerce_line_item_type_info().
+ * Creates a new line item type.
+ */
+function promo_code_commerce_line_item_type_info() {
+  return array(
+    'promo_code_product' => array(
+      'name' => t('Code Promotionnel'),
+      'product' => TRUE,
+      'description' => t('Line item for promo codes.'),
+      'add_form_submit_value' => t('Add to cart'),
+      'base' => 'promo_code_line_item',
+    ),
+  );
+}
+
+/**
+ * Implements hook_title()
+ * Returns the title of the line item
+ */
+function promo_code_line_item_title($line_item) {
+  $line_item_wrapper = entity_metadata_wrapper('commerce_line_item', $line_item);
+  return $line_item_wrapper->commerce_product->title->value();
+}
+
+/**
+ * Implementation of hook_commerce_price_component_type_info().
+ * Creates a new discount price component type
+ */
+function promo_code_commerce_price_component_type_info() {
+  return array(
+    'promo_premier' => array(
+      'title' => t('Code Promotionnel'),
+      'weight' => -10,
+    ),
+  );
+}
+
+/**
+ * Allows modules to alter the price component types defined by other modules.
+ */
+function promo_code_commerce_price_component_type_info_alter(&$component_types) {
+  //$component_types['base_price']['weight'] = -100; // Move Base Price at the beginning.
+  //$component_types['promo_code']['weight'] = $component_types['base_price']['weight'] + 1; // Move Discount just before the Base Price.
+}
+
+function promo_code_commerce_price_formatted_components_alter(&$components, $price, $entity) {
+  if (isset($components['tax|tva'])) {
+    $components['tax|tva']['weight'] = 1;
+  }
+  if (isset($components['promo_premier'])) {
+    $base_price = $components['base_price']['price']['amount'] + $components['promo_premier']['price']['amount'];
+    $components['base_price']['price']['amount'] = $base_price;
+    if ($base_price == 0 && $components['tax|tva']['price']['amount'] < 0) {
+      $components['tax|tva']['price']['amount'] = 0;
+      foreach ($components['commerce_price_formatted_amount']['price']['data']['components'] as $key => $comp) {
+        if ($comp['name'] == 'base_price') {
+          $components['commerce_price_formatted_amount']['price']['data']['components'][$key]['price']['amount'] = 0;
+        }
+        if ($comp['name'] == 'tax|tva') {
+          $components['commerce_price_formatted_amount']['price']['data']['components'][$key]['price']['amount'] = 0;
+        }
+        if ($comp['name'] == 'promo_premier') {
+          unset($components['commerce_price_formatted_amount']['price']['data']['components'][$key]);
+        }
+      }
+    }
+    if ($base_price == 0 && $components['commerce_price_formatted_amount']['price']['amount'] < 0) {
+      $components['commerce_price_formatted_amount']['price']['amount'] = 0;
+    }
+    unset($components['promo_premier']);
+  }
+  $components['commerce_price_formatted_amount']['weight'] = 3;
+}
+
+function promo_code_get_promo_list() {
+  return db_query("SELECT * FROM devis_promo_code")->fetchAll();
+}
+
+/**
+ * Check if a given string is a valid, enabled promo code.
+ * Used in rules: rules_become_provider_check_promo_code.
+ */
+function promo_code_is_valid($code) {
+  $query = "
+    SELECT code 
+    FROM devis_promo_code 
+    WHERE CURDATE() BETWEEN FROM_UNIXTIME(date_begin, '%Y-%m-%d') AND FROM_UNIXTIME(date_end, '%Y-%m-%d')
+      AND code = :code
+      AND enabled = 1
+  ";
+  return db_query($query, array(':code' => $code))->fetchObject();
+}
+
+/**
+ * Changes the promo code of an entity prepending a value: "NV: ",
+ * which stands for Not Valid. This is a way to make the code invalid
+ * when the user actually put the code and not later.
+ * Used in rules: rules_become_provider_check_promo_code.
+ */
+function promo_code_remove_from_entity($entity, $save = FALSE) {
+  $entity_wrapper = entity_metadata_wrapper('entityform', $entity);
+  $new_promo = 'NV: '. $entity_wrapper->field_promotional_code->value();
+  $entity_wrapper->field_promotional_code->set($new_promo);
+  // There is no need to save here as it's being saved in rules.
+  // If we save here, it gives a duplicate entry SQL error because it saves
+  // the entity twice instead of updating its values.
+  if ($save) {
+    $entity_wrapper->save();
+  }
+}
+
+/** 
+ * Get the list of users that have the promotion active.
+ */
+function promo_code_get_user_list() {
+  $query = "
+    SELECT pcu.uid, pcu.cid, SUM(pcu.code_usage) as code_usage, pc.discount, pc.code, pc.date_begin, pc.date_end
+    FROM devis_promo_code_usage pcu
+    INNER JOIN devis_promo_code pc ON pc.cid = pcu.cid AND pc.discount > pcu.code_usage
+    INNER JOIN users u ON u.uid = pcu.uid
+    INNER JOIN users_roles ur ON u.uid = ur.uid AND ur.rid = 4
+    WHERE u.status <> '0'
+      AND pc.enabled = 1
+    GROUP BY pcu.uid, pcu.cid
+  ";
+  return db_query($query)->fetchAll();
+}
+
+function promo_code_get_user_values($account) {
+  $query = "
+    SELECT pcu.cid, SUM(pcu.code_usage) as code_usage, pc.discount, pc.code, pc.date_begin, pc.date_end, pc.enabled
+    FROM devis_promo_code_usage pcu
+    INNER JOIN devis_promo_code pc ON pc.cid = pcu.cid AND pc.discount > pcu.code_usage
+    WHERE pcu.uid = :uid
+    GROUP BY pcu.uid
+  ";
+  return db_query($query, array(':uid' => $account->uid))->fetchObject();
+}
+
+function promo_code_get_user_values_granular($account) {
+  $query = "
+    SELECT pcu.order_id, pcu.cid, pcu.code_usage, pc.discount, pc.code, pc.date_begin, pc.date_end, pc.enabled
+    FROM devis_promo_code_usage pcu
+    INNER JOIN devis_promo_code pc ON pc.cid = pcu.cid AND pc.discount > pcu.code_usage
+    WHERE pcu.uid = :uid
+  ";
+  return db_query($query, array(':uid' => $account->uid))->fetchAll();
+}
+
+/**
+ * Cleans the invoices that are in payment pending status with
+ * total amount of 0 and with a discount, because this means that
+ * the order has been set to 0 thanks to a discount or a promo code,
+ * but still needs to be sent to the user.
+ */
+function promo_code_clean_invoice($order_id) {
+  $order = commerce_order_load($order_id);
+  $lang = key($order->commerce_order_total);
+  $total = $order->commerce_order_total[$lang][0]['amount'];
+  if ($total == 0) {
+    // Invoke the component that changes the status of the order to completed.
+    rules_invoke_component('rules_charge_orders_with_0_amount', $order);
+  }
+}
+
+/**
+ * Adds a promo code line item to a given user.
+ * Used in rules: rules_budget_request_approval
+ */
+function promo_code_add_promo_code_line_item($account) {
+  if (promo_code_user_has_usage_available($account)) {
+    // Check if there are already line items for the promo code.
+    $orders = commerce_order_load_multiple(array(), array('uid' => $account->uid, 'status' => 'recurring_open'));
+    $order_id = key($orders);
+    $order = current($orders);
+    $lang = key($orders[$order_id]->commerce_line_items);
+    $order_line_items = array();
+    foreach ($orders[$order_id]->commerce_line_items[$lang] as $key => $val) {
+      $order_line_items[] = $val['line_item_id'];
+    }
+    $line_items = commerce_line_item_load_multiple($order_line_items, array('order_id' => $order_id, 'line_item_label' => 'promo_premier'));
+    
+    if (!$line_items) {
+      $license = commerce_license_billing_get_master_license($account->uid);
+      if ($license) {
+        $usage_group = commerce_license_billing_usage_group($license, 'promo_code_premier');
+        $usage_group->addUsage($license->revision_id, 1);
+        $link = l($account->realname, 'user/'. $account->uid);
+        watchdog('devis', t('Promo code line item added to the user !link.', array('!link' => $link)));
+      }
+    }
+  }
+  return TRUE;
+}
+
+/**
+ * Determines if a user is able to use a promotion code.
+ * Meaning that the usage hasn't been exhausted.
+ */
+function promo_code_user_has_usage_available($account) {
+  $promo_code = promo_code_load_by_user($account);
+  if (!$promo_code) return FALSE;
+  // If the code is valid, then get the values.
+  $vals = promo_code_get_user_values($account);
+  
+  // If user has the promo discount code correct, and the 
+  // used amount is less than the total available, and the 
+  // order is greater than 0, then apply the discount using
+  // the minimum between the order total and the difference
+  // between the promo discount and the used discount so far.
+  $used = $vals->code_usage;
+  $discount = $promo_code->discount;
+  if ($used < $discount) {
+    return array('used' => $used, 'discount' => $discount);
+  }
+  return FALSE;
+}
+
+/**
+ * Updates the promo code usage of a user in the db.
+ * Used in rules: rules_provider_update_promo_discount
+ */
+function promo_code_update_usage_for_user($uid, $line_item) {
+  // If the line item is indeed a promo line item.
+  if ($line_item->line_item_label == 'promo_premier') {
+    // Calculate the order promo usage.
+    $code_usage = 0;
+    $lang = key($line_item->commerce_total);
+    foreach ($line_item->commerce_total[$lang][0]['data']['components'] as $res) {
+      if ($res['name'] == 'promo_premier') {
+        $code_usage = $res['price']['amount'] * -1;
+      }
+    }
+    
+    // Check if the line in the db has already been created or not.
+    $account = user_load($uid);
+    $insert = TRUE;
+    $vals = promo_code_get_user_values_granular($account);
+    foreach ($vals as $res) {
+      if ($res->order_id == $line_item->order_id) $insert = FALSE;
+    }
+    
+    // If the order promo usage is greater than 0, insert it in the db.
+    if ($code_usage > 0 && $insert) {
+      $promo_code = promo_code_load_by_user($account);      
+      db_insert('devis_promo_code_usage')
+        ->fields(array(
+          'code_usage' => $code_usage,
+          'cid' => $promo_code->cid,
+          'uid' => $account->uid,
+          'order_id' => $line_item->order_id,
+        ))
+        ->execute();
+    }
+  }
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter().
+ */
+function promo_code_form_devenir_entityform_edit_form_alter(&$form, &$form_state, $form_id) {
+  // Extra submission rules.
+  if ($form_state['input']) {
+    if (isset($form_state['input']['field_promotional_code'])) {
+      $lang = key($form_state['input']['field_promotional_code']);
+      $promo = trim($form_state['input']['field_promotional_code'][$lang][0]['value']);
+
+      $promos = promo_code_get_promo_list();
+      foreach ($promos as $val) {
+        // If it's the same code, then check the other values.
+        if ($val->code == $promo) {
+          $date1 = new DateTime(date('d-m-Y', $val->date_end));
+          $date2 = new DateTime(date('d-m-Y'));
+          if ($date1 < $date2 || !$val->enabled) {
+            drupal_set_message(t('Le code promotionnel introduit n’est plus valable.'), 'warning');
+            $form_state['input']['field_promotional_code'][$lang][0]['value'] = 'HOLA!!!';
+          }
+        }
+      }
+    }
+  }
+}

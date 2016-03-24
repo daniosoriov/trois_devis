@@ -1,0 +1,5 @@
+name = Profile Module
+description = Merges Profile2 forms into user "Edit profile" tab for user account. Based on account_profile and edit_profile.
+core = 7.x
+package = 3devis
+dependencies[] = profile2

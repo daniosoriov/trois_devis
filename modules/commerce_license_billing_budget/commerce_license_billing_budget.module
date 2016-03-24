@@ -1,0 +1,161 @@
+<?php
+
+/**
+ * @file
+ * Provides a framework for selling budget requests (Devis).
+ *
+ * A good example to implement a plugin: https://drupalcommerce.org/blog/15853/implementing-commerce-license-plugin
+ */
+
+/**
+ * Implements hook_ctools_plugin_directory().
+ */
+function commerce_license_billing_budget_ctools_plugin_directory($owner, $plugin_type) {
+  if (in_array($owner, array('commerce_license', 'commerce_license_billing'))) {
+    return "plugins/$plugin_type";
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_license_billing_budget_menu() {
+  $items['admin/commerce/config/license/budget'] = array(
+    'title' => 'Billing Budget',
+    'description' => 'Configure budget license settings.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('commerce_license_billing_budget_settings_form'),
+    'access arguments' => array('administer licenses'),
+    'file' => 'includes/commerce_license_billing_budget.admin.inc',
+    'type' => MENU_LOCAL_TASK,
+  );
+  return $items;
+}
+
+/**
+ * Return a list of product types used for budget licensing.
+ *
+ * @return
+ *   An array of product type machine names.
+ */
+function commerce_license_billing_budget_product_types() {
+  $budget_product_types = variable_get('cl_billing_budget_product_types', array());
+  $budget_product_types = array_filter($budget_product_types);
+  // Return only those $budget_product_types that are still licensable.
+  $license_product_types = commerce_license_product_types();
+  return array_intersect($budget_product_types, $license_product_types);
+}
+
+/**
+ * Implements hook_commerce_license_types_list_alter().
+ *
+ * Removes the Billing Budget license type option from those product types that don't
+ * have it configured.
+ */
+function commerce_license_billing_budget_commerce_license_types_list_alter(&$types, $product) {
+  if (!empty($product) && !in_array($product->type, commerce_license_billing_budget_product_types())) {
+    unset($types['billing_budget']);
+  }
+}
+
+/**
+ * Implements hook_flush_caches().
+ *
+ * Ensures that products have the required commerce_license_billing_budget field.
+ */
+function commerce_license_billing_budget_flush_caches() {
+  $product_types = commerce_license_billing_budget_product_types();
+  commerce_license_billing_budget_configure_product_types($product_types);
+}
+
+/**
+ * Ensures that the provided product types have the required fields.
+ *
+ * Fields:
+ * - cl_billing_budget: a list(text) field pointing to a taxonomy_term_reference.
+ *
+ * @param $types
+ *   An array of product type machine names.
+ */
+function commerce_license_billing_budget_configure_product_types($types) {
+  $field = field_info_field('cl_billing_budget');
+  if (!$field) {
+    $field = array(
+      'field_name' => 'cl_billing_budget',
+      'cardinality' => 1,
+      'type' => 'taxonomy_term_reference',
+      'locked' => TRUE,
+      'settings' => array(
+        'allowed_values' => array(
+          array(
+            'vocabulary' => 'devis',
+            'parent' => '0',
+          ),
+        ),
+      ),
+    );
+    field_create_field($field);
+  }
+
+  $existing = array();
+  if (!empty($field['bundles']['commerce_product'])) {
+    $existing = $field['bundles']['commerce_product'];
+  }
+  // Create instances on newly configured product types.
+  foreach (array_diff($types, $existing) as $new_bundle) {
+    $instance = array(
+      'field_name' => 'cl_billing_budget',
+      'entity_type' => 'commerce_product',
+      'bundle' => $new_bundle,
+      'label' => t('License Billing Budget'),
+      'description' => t('Choose the budget type for this product.'),
+      'required' => TRUE,
+      'widget' => array(
+        'type' => 'options_select',
+        'weight' => 9,
+      ),
+    );
+    field_create_instance($instance);
+  }
+  // Remove instances from product types that can no longer have budget licenses.
+  foreach (array_diff($existing, $types) as $removed_bundle) {
+    $instance = field_info_instance('commerce_product', 'cl_billing_budget', $removed_bundle);
+    field_delete_instance($instance, TRUE);
+  }
+}
+
+/**
+ * Implements hook_commerce_license_billing_initial_usage().
+ */
+function commerce_license_billing_budget_commerce_license_billing_initial_usage($license, $group_name) {
+  if ($group_name == 'accountant_budget') {
+    //return 2;
+  }
+}
+
+
+/**
+ * Returns the main license for the provided uid.
+ *
+ * @param $uid
+ *   The user id.
+ *
+ * @return
+ *   A commerce_license entity, or FALSE if none found.
+ */
+function commerce_license_billing_get_master_license($uid) {
+  $license = FALSE;
+  $query = new EntityFieldQuery();
+  $query
+    ->entityCondition('entity_type', 'commerce_license')
+    ->entityCondition('bundle', 'billing_budget')
+    ->propertyCondition('uid', $uid)
+    ->propertyCondition('status', COMMERCE_LICENSE_ACTIVE);
+  $result = $query->execute();
+  if ($result) {
+    $license_id = key($result['commerce_license']);
+    $license = entity_load_single('commerce_license', $license_id);
+  }
+
+  return $license;
+}

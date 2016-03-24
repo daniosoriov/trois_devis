@@ -1,0 +1,4 @@
+name = 3devis Promo Code
+description = A module to implement the promo code.
+core = 7.x
+package = 3devis

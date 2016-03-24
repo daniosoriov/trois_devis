@@ -1,0 +1,176 @@
+<?php
+
+/**
+ * @file
+ * Installation and update functions for the promo code module.
+ */
+
+/**
+ * Implements hook_schema().
+ */
+function promo_code_schema() {
+  $schema['devis_promo_code'] = array(
+    'fields' => array(
+      'cid' => array(
+        'type'        => 'serial', 
+        'unsigned'    => TRUE, 
+        'not null'    => TRUE, 
+        'disp-width'  => 10,
+      ),
+      'code'          => array(
+        'type'        => 'varchar',
+        'length'      => 100,
+        'not null'    => TRUE,
+        'default'     => '',
+      ),
+      'discount'      => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'not null'    => TRUE, 
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'The discount in EUR.', 
+      ),
+      'amount'        => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'not null'    => TRUE, 
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'The available amount of codes.', 
+      ),
+      'date_begin'    => array(
+        'type'        => 'int',
+        'not null'    => TRUE, 
+        'unsigned'    => FALSE,
+        'disp-width'  => 11,
+      ),
+      'date_end'      => array(
+        'type'        => 'int',
+        'not null'    => TRUE, 
+        'unsigned'    => FALSE,
+        'disp-width'  => 11,
+      ),
+      'enabled'       => array(
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'default'     => 1,
+        'disp-width'  => 3,
+      ),
+    ),
+    'indexes'     => array(
+      'enabled'   => array('enabled'),
+    ),
+    'primary key' => array('cid'),
+  );
+  
+  $schema['devis_promo_code_usage'] = array(
+    'fields' => array(
+      'cid'           => array(
+        'type'        => 'int', 
+        'unsigned'    => TRUE, 
+        'not null'    => TRUE, 
+        'disp-width'  => 10,
+      ),
+      'uid'           => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'not null'    => TRUE,
+        'disp-width'  => 10,
+      ),
+      'order_id'      => array(
+        'type'        => 'int',
+        'unsigned'    => TRUE,
+        'not null'    => TRUE,
+      ),
+      'code_usage'    => array(
+        'type'        => 'int', 
+        'unsigned'    => FALSE, 
+        'not null'    => TRUE, 
+        'default'     => 0,
+        'disp-width'  => 3,
+        'description' => 'The usage of the promo.',
+      ),
+    ),
+    'primary key' => array('cid', 'uid'),
+  );
+  return $schema;
+}
+
+/**
+ * Create new database table {devis_promo_code} and {devis_promo_code_usage}.
+ */
+function promo_code_update_7001() {
+  $schema['devis_promo_code'] = array(
+    'fields' => array(
+      'cid'        => array('type' => 'serial', 'unsigned' => TRUE, 'not null' => TRUE, 'disp-width' => 10),
+      'discount'   => array('type' => 'int', 'unsigned' => FALSE, 'not null' => TRUE, 'default' => 0, 'description' => 'The discount in EUR.'),
+      'amount'     => array('type' => 'int', 'unsigned' => FALSE, 'not null' => TRUE, 'default' => 0, 'description' => 'The available amount of codes.'),
+      'date_begin' => array('type' => 'int', 'not null' => TRUE, 'unsigned' => FALSE, 'disp-width' => 11),
+      'date_end'   => array('type' => 'int', 'not null' => TRUE, 'unsigned' => FALSE, 'disp-width' => 11),
+      'enabled'    => array('type' => 'int', 'unsigned' => TRUE, 'default' => 1, 'disp-width' => 3),
+    ),
+    'indexes'     => array(
+      'enabled'   => array('enabled'),
+    ),
+    'primary key' => array('cid'),
+  );
+  db_create_table('devis_promo_code', $schema['devis_promo_code']);
+  
+  $schema['devis_promo_code_usage'] = array(
+    'fields' => array(
+      'cid'   => array('type' => 'int', 'unsigned' => TRUE, 'not null' => TRUE, 'disp-width' => 10),
+      'uid'   => array('type' => 'int', 'unsigned' => FALSE, 'not null' => TRUE, 'disp-width' => 10),
+      'code_usage' => array('type' => 'int', 'unsigned' => FALSE, 'not null' => TRUE, 'default' => 0, 'disp-width' => 3, 'description' => 'The usage of the promo.'),
+    ),
+    'primary key' => array('cid', 'uid'),
+  );
+  db_create_table('devis_promo_code_usage', $schema['devis_promo_code_usage']);
+}
+
+/**
+ * Add code field to {devis_promo_code} table.
+ */
+function promo_code_update_7002() {
+  $spec = array(
+    'type' => 'varchar',
+    'length' => 100,
+    'not null' => TRUE,
+    'default' => '',
+  );
+  db_add_field('devis_promo_code', 'code', $spec);
+}
+
+/**
+ * Add order_id field to {devis_promo_code_usage} table.
+ */
+function promo_code_update_7003() {
+  $spec = array(
+    'type' => 'int',
+    'unsigned' => TRUE,
+    'not null' => TRUE,
+  );
+  db_add_field('devis_promo_code_usage', 'order_id', $spec);
+}
+
+/**
+ * Edit primary key to {devis_promo_code_usage} table.
+ */
+function promo_code_update_7004() {
+  // Drop all primary keys.
+  db_drop_primary_key('devis_promo_code_usage');
+  // Add all primary keys including your edits.
+  db_add_primary_key('devis_promo_code_usage', array('cid', 'uid', 'order_id'));
+}
+
+/**
+ * Implements hook_uninstall().
+ */
+function promo_code_uninstall() {
+  variable_del('trois_devis_promotion_enable');
+  variable_del('trois_devis_promotion_code');
+  
+  variable_del('trois_devis_promotion_discount');
+  variable_del('trois_devis_promotion_amount');
+  variable_del('trois_devis_promotion_end_date');
+}
