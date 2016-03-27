@@ -1627,6 +1627,28 @@ function trois_devis_valid_be_phone_number($phonenumber) {
 }
 
 /**
+ * Given the type of the entityform, gets the readable label
+ * to display.
+ * @param $type the type of the entityform
+ * @return the label string
+ */
+function trois_devis_get_entityform_type_label($type) {
+  $string = '';
+  switch ($type) {
+    case 'comptable':
+    case 'budget_photographer':
+      $string = 'budget';
+      break;
+
+    case 'devenir':
+    case 'devenir_fournisseur_photographe':
+      $string = 'provider';
+      break;
+  }
+  return $string;
+}
+
+/**
  * Given the type of the entityform, determines the label to display
  * on different interfaces.
  * @param $type the type of the entityform
@@ -1637,12 +1659,13 @@ function trois_devis_get_entityform_label($type, $ucwords = TRUE) {
   switch ($type) {
     case 'comptable':
     case 'devenir':
-      $string = 'comptable';
+      $string = 'accountant';
       break;
       
     default:
       $pieces = explode('_', $type);
       $string = array_pop($pieces);
+      if ($string == 'photographe') $string = 'photographer';
       break;
   }
   if ($ucwords) $string = ucwords($string);
@@ -1742,6 +1765,21 @@ function trois_devis_entityform_email_data($entityform, $plain_text = FALSE) {
   $lines[] = '';
   
   return (!$plain_text) ? implode($lines, '<br />') : strip_tags(implode($lines, "\n"));
+}
+
+/**
+ * THIS IS NOT WORKING !!
+ */
+function trois_devis_date_part_label_date(&$vars) {
+  if ($vars['element']['#field']['field_name'] == 'field_event_date') {
+    if ($vars['element']['#date_title'] == 'Date Start date') {
+      return t('Event Date');
+    } elseif ($vars['element']['#date_title'] == 'Date End date') {
+      return t('Event Date To :)');
+    }
+  } else {
+    return t($vars['element']['#date_title']);
+  }
 }
 
 /**

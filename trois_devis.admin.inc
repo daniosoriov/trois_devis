@@ -61,56 +61,79 @@ function trois_devis_administration_form($form, &$form_state) {
     '#collapsible'   => FALSE,
     '#collapsed'     => FALSE,
   );
-  $form['meta']['trois_devis_comptable_title'] = array(
+  $form['meta']['budget_request'] = array(
+    '#type'          => 'fieldset',
+    '#title'         => t('Budget request'),
+    '#collapsible'   => TRUE,
+    '#collapsed'     => TRUE,
+  );
+  $form['meta']['budget_request']['trois_devis_comptable_title'] = array(
     '#type'          => 'textfield',
-    '#title'         => t('Demander un devis title'),
+    '#title'         => t('Accountant request title'),
     '#description'   => t('Set the title for the page on: eform/submit/comptable.'),
     '#default_value' => variable_get('trois_devis_comptable_title', ''),
     '#size'          => 100,
     '#maxlength'     => 250,
     '#required'      => TRUE,
   );
-  $form['meta']['trois_devis_comptable_description'] = array(
+  $form['meta']['budget_request']['trois_devis_comptable_description'] = array(
     '#type'          => 'textarea',
-    '#title'         => t('Demander un devis description'),
+    '#title'         => t('Accountant request description'),
     '#description'   => t('Set the description for the page on: eform/submit/comptable.'),
     '#default_value' => variable_get('trois_devis_comptable_description', ''),
     '#required'      => TRUE,
   );
-  $form['meta']['devenir_fournisseur'] = array(
+  $form['meta']['budget_request']['trois_devis_budget_photographer_title'] = array(
+    '#type'          => 'textfield',
+    '#title'         => t('Photographer request title'),
+    '#description'   => t('Set the title for the page on: eform/submit/budget-photographer.'),
+    '#default_value' => variable_get('trois_devis_budget_photographer_title', ''),
+    '#size'          => 100,
+    '#maxlength'     => 250,
+    '#required'      => TRUE,
+  );
+  $form['meta']['budget_request']['trois_devis_budget_photographer_description'] = array(
+    '#type'          => 'textarea',
+    '#title'         => t('Photographer request description'),
+    '#description'   => t('Set the description for the page on: eform/submit/budget-photographer.'),
+    '#default_value' => variable_get('trois_devis_budget_photographer_description', ''),
+    '#required'      => TRUE,
+  );
+  
+  $form['meta']['become_provider'] = array(
     '#type'          => 'fieldset',
-    '#title'         => t('Devenir Fournisseur'),
+    '#title'         => t('Become provider'),
     '#collapsible'   => TRUE,
     '#collapsed'     => TRUE,
   );
-  $form['meta']['devenir_fournisseur']['trois_devis_devenir_title'] = array(
+  $form['meta']['become_provider']['trois_devis_devenir_title'] = array(
     '#type'          => 'textfield',
-    '#title'         => t('Comptable title'),
+    '#title'         => t('Accountant title'),
     '#description'   => t('Set the title for the page on: eform/submit/devenir.'),
     '#default_value' => variable_get('trois_devis_devenir_title', ''),
     '#size'          => 100,
     '#maxlength'     => 250,
     '#required'      => TRUE,
   );
-  $form['meta']['devenir_fournisseur']['trois_devis_devenir_description'] = array(
+  $form['meta']['become_provider']['trois_devis_devenir_description'] = array(
     '#type'          => 'textarea',
-    '#title'         => t('Comptable description'),
+    '#title'         => t('Accountant description'),
     '#description'   => t('Set the description for the page on: eform/submit/devenir.'),
     '#default_value' => variable_get('trois_devis_devenir_description', ''),
     '#required'      => TRUE,
   );
-  $form['meta']['devenir_fournisseur']['trois_devis_devenir_photographe_title'] = array(
+  $form['meta']['become_provider']['trois_devis_devenir_photographe_title'] = array(
     '#type'          => 'textfield',
-    '#title'         => t('Photographe title'),
+    '#title'         => t('Photographer title'),
     '#description'   => t('Set the title for the page on: eform/submit/devenir-fournisseur-photographe.'),
     '#default_value' => variable_get('trois_devis_devenir_photographe_title', ''),
     '#size'          => 100,
     '#maxlength'     => 250,
     '#required'      => TRUE,
   );
-  $form['meta']['devenir_fournisseur']['trois_devis_devenir_photographe_description'] = array(
+  $form['meta']['become_provider']['trois_devis_devenir_photographe_description'] = array(
     '#type'          => 'textarea',
-    '#title'         => t('Photographe description'),
+    '#title'         => t('Photographer description'),
     '#description'   => t('Set the description for the page on: eform/submit/devenir-fournisseur-photographe.'),
     '#default_value' => variable_get('trois_devis_devenir_photographe_description', ''),
     '#required'      => TRUE,

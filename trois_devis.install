@@ -269,6 +269,15 @@ function trois_devis_uninstall() {
   variable_del('trois_devis_hash_key');
   variable_del('trois_devis_terms_nid');
   
+  variable_del('trois_devis_comptable_title');
+  variable_del('trois_devis_comptable_description');
+  variable_del('trois_devis_budget_photographer_title');
+  variable_del('trois_devis_budget_photographer_description');
+  variable_del('trois_devis_devenir_title');
+  variable_del('trois_devis_devenir_description');
+  variable_del('trois_devis_devenir_photographe_title');
+  variable_del('trois_devis_devenir_photographe_description');
+  
   variable_del('trois_devis_first_step_message');
   variable_del('trois_devis_second_step_message');
   variable_del('trois_devis_third_step_message');
