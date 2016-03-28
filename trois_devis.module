@@ -1119,31 +1119,72 @@ function _trois_devis_budget_get_group_name($legal_status, $type = '') {
   return $group_name;
 }
 
-function trois_devis_get_product_from_status($legal_status) {
+/**
+ * Find the prices for a given budget type based on the products.
+ * @param $entityform_type the type of the entityform budget.
+ * @param $variable the type of the budget (legal status, event type, etc).
+ * @return the prices in an ordered array.
+ */
+function trois_devis_get_budget_prices($entityform_type, $variable) {
+  $keep = array();
+  $product_key = trois_devis_get_product_key_from_type($entityform_type, $variable);
+  $products = commerce_product_load_multiple(array(), array('type' => 'devis'));
+  $temp = $order = array();
+  foreach ($products as $key => $product) {
+    if (substr($product->sku, 0, -5) == $product_key) {
+      $price = commerce_product_calculate_sell_price($product);
+      $price_display = commerce_currency_format($price['amount'], $price['currency_code'], $product);
+      $temp[$key] = $price_display;
+      $order[$key] = $price['amount'];
+    }
+  }
+  asort($order, SORT_NUMERIC);
+  foreach ($order as $key => $price) {
+    $keep[$key] = $temp[$key];
+  }
+  return $keep;
+}
+
+/**
+ * Gets the product root base name for the budget request based on the 
+ * type of the budget.
+ * @param $entityform_type the type of the entityform budget.
+ * @param $variable the type of the budget (legal status, event type, etc).
+ * @return the product key base.
+ */
+function trois_devis_get_product_key_from_type($entityform_type, $variable) {
   $product_key = '';
-  switch ($legal_status) {
-    case 'society':
-      $product_key = 'compt_soc';
+  switch ($entityform_type) {
+    case 'comptable':
+      switch ($variable) {
+        case 'society':
+          $product_key = 'compt_soc';
+          break;
+
+        case 'independent':
+          $product_key = 'compt_indep';
+          break;
+
+        case 'independent_comp':
+          $product_key = 'compt_indep_comp';
+          break;
+
+        case 'association':
+          $product_key = 'compt_asoc';
+          break;
+
+        case 'nonexistent':
+          $product_key = 'compt_soc_for';
+          break;
+
+        case 'independent_plan':
+          $product_key = 'compt_indep_plan';
+          break;
+      }
       break;
-    
-    case 'independent':
-      $product_key = 'compt_indep';
-      break;
-    
-    case 'independent_comp':
-      $product_key = 'compt_indep_comp';
-      break;
-    
-    case 'association':
-      $product_key = 'compt_asoc';
-      break;
-    
-    case 'nonexistent':
-      $product_key = 'compt_soc_for';
-      break;
-    
-    case 'independent_plan':
-      $product_key = 'compt_indep_plan';
+      
+    case 'budget_photographer':
+      $product_key = 'photo_'. $variable;
       break;
   }
   return $product_key;
