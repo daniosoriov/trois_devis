@@ -16,24 +16,6 @@ class CommerceLicenseBillingBudget extends CommerceLicenseBase implements Commer
    * Implements CommerceLicenseBillingUsageInterface::usageGroups().
    */
   public function usageGroups() {
-    /*
-    // Devis products are automatically added by querying the DB. 
-    
-    THIS IS NOT POSSIBLE !
-    
-    $ug = array();
-    $products = commerce_product_load_multiple(array(), array('type' => 'devis'));
-    foreach ($products as $key => $product) {
-      $price = commerce_product_calculate_sell_price($product);
-      $ug[$product->sku] = array(
-        'title' => $product->title .' ['. $price['amount'] .']',
-        'type' => 'counter',
-        'product' => $product->sku,
-        'free_quantity' => 0,
-        'immediate' => TRUE,
-      );
-    }
-    */
     // Prepare the products.
     $products = array(
       'compt_soc' => t('Accountant Budget for Society'),
@@ -42,6 +24,12 @@ class CommerceLicenseBillingBudget extends CommerceLicenseBase implements Commer
       'compt_indep' => t('Accountant Budget for Independent'),
       'compt_indep_comp' => t('Accountant Budget for Complementary Independent'),
       'compt_indep_plan' => t('Accountant Budget for New Independent'),
+      'photo_birthday' => t('Photographer Budget for Birthday'),
+      'photo_conference' => t('Photographer Budget for Conference'),
+      'photo_corporate' => t('Photographer Budget for Corporate'),
+      'photo_family' => t('Photographer Budget for Family'),
+      'photo_other' => t('Photographer Budget for Other'),
+      'photo_wedding' => t('Photographer Budget for Wedding'),
     );
     // Define the prices.
     $prices = array('0250', '0300', '0350', '0400', '0450', '0500', '0550', '0600', 
@@ -63,7 +51,6 @@ class CommerceLicenseBillingBudget extends CommerceLicenseBase implements Commer
         );
       }
     }
-    
     
     // Other products.
     $ug['general_credit_note'] = array(
