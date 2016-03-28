@@ -336,7 +336,7 @@ function trois_devis_show_info($hash, $accept = FALSE) {
       // If there's no information about this user, then create it based on the values.
       if (!$hash_user) {
         // Update user values about the connection.
-        rules_invoke_component('rules_budget_provider_contacted_new', $user, $entityform, $info->contacted);
+        rules_invoke_component('rules_budget_provider_accountant_contacted', $user, $entityform, $info->contacted);
         $hash_user = _trois_devis_get_hash($entityform_id, $user->uid, TRUE);
       }
       // Then, we redirect the user to the correct page.
@@ -934,7 +934,8 @@ function _trois_devis_user_has_valid_credit_card($uid) {
 
 /**
  * Create the unique id and insert data in the db for viewing the info about the request.
- * Used in rules: rules_budget_request_approval_new.
+ * Used in rules: rules_budget_request_approval_new
+ * Used in rules: rules_budget_request_photographer_approval
  */
 function trois_devis_create_hash($entity, $account = null, $time = 0) {
   $key = variable_get('trois_devis_hash_key', '');
@@ -1314,6 +1315,7 @@ function trois_devis_get_entityform_price($entityform) {
  * on the email of the provider or potential provider.
  *
  * used in rules: rules_budget_request_approval_new
+ * used in rules: rules_budget_request_photographer_approval
  *
  * @param Object $entityform the entityform.
  * @param Object $account the account of the provider if any. Default to null.
@@ -1328,6 +1330,16 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
   $hash = _trois_devis_get_hash($entityform->entityform_id, (!is_null($account)) ? $account->uid : 0, TRUE);
   $info = _trois_devis_get_info($hash, TRUE);
   $site_name = variable_get('site_name', '3devis');
+  
+  switch ($entityform->type) {
+    case 'comptable':
+      $text_name = '@name needs a budget for accounting.';
+      break;
+      
+    case 'budget_photographer':
+      $text_name = '@name needs a budget for a photography coverage.';
+      break;
+  }
   
   // If using mailchimp, we add the logo to the top.
   if ($mailchimp) {
@@ -1371,7 +1383,7 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
   $field = field_get_items('entityform', $entityform, 'field_name');
   $last_name = ucfirst(substr(render(field_view_value('entityform', $entityform, 'field_name', $field[0], array())), 0, 1));
   $name = $first_name .' '. $last_name .'.';
-  $lines[] = t('@name needs a budget for accounting.', array('@name' => $name));
+  $lines[] = t($text_name, array('@name' => $name));
   $lines[] = '';
   $lines[] = t('Click "See the request" bellow to receive further details.');
   $lines[] = '';
@@ -1417,79 +1429,151 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
                   <td>
   ';
   
-  $field = field_get_items('entityform', $entityform, 'field_legal_status');
-  $lines[] = '<span '. $style_span .'>'. t('Statut juridique') .':</span>';
-  $lines[] = render(field_view_value('entityform', $entityform, 'field_legal_status', $field[0], array()));
-  $lines[] = '';
-  
-  $field = field_get_items('entityform', $entityform, 'field_desired_benefits');
-  $lines[] = '<span '. $style_span .'>'. t('Prestations souhaitées') .':</span>';
-  $lines[] = render(field_view_value('entityform', $entityform, 'field_desired_benefits', $field[0], array()));
-  $lines[] = '';
-  
-  $field = field_get_items('entityform', $entityform, 'field_info_extra');
-  if (trim($field[0]['value'])) {
-    $lines[] = '<span '. $style_span .'>'. t("Plus d'information concernant la demande") .':</span>';
-    $lines[] = render(field_view_value('entityform', $entityform, 'field_info_extra', $field[0], array()));
-    $lines[] = '';
-  }
-  
-  $field = field_get_items('entityform', $entityform, 'field_activity');
-  $lines[] = '<span '. $style_span .'>'. t('Activité ou profession') .':</span>';
-  $lines[] = render(field_view_value('entityform', $entityform, 'field_activity', $field[0], array()));
-  $lines[] = '';
-  
-  $field = field_get_items('entityform', $entityform, 'field_annual_revenue');
-  $lines[] = '<span '. $style_span .'>'. t("Chiffre d'affaires") .':</span>';
-  if ($field[0]['value'] != 'nonexistent') {
-    $lines[] = render(field_view_value('entityform', $entityform, 'field_annual_revenue', $field[0], array()));
-  }
-  else {
-    $field = field_get_items('entityform', $entityform, 'field_estimated_annual_revenue');
-    $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_annual_revenue', $field[0], array())) . ' €';
-  }
-  $lines[] = '';
-  
-  $field = field_get_items('entityform', $entityform, 'field_annual_invoice');
-  $lines[] = '<span '. $style_span .'>'. t("Nombre annuel de factures d'achat et de vente à traiter") .':</span>';
-  if ($field[0]['value'] != 'nonexistent') {
-    $lines[] = render(field_view_value('entityform', $entityform, 'field_annual_invoice', $field[0], array()));
-  }
-  else {
-    $field = field_get_items('entityform', $entityform, 'field_estimated_annual_invoice');
-    $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_annual_invoice', $field[0], array()));
-  }
-  $lines[] = '';
-  
-  $field = field_get_items('entityform', $entityform, 'field_number_employees');
-  $lines[] = '<span '. $style_span .'>'. t('Taille de la structure (salariés + administrateurs)') .':</span>';
-  if ($field[0]['value'] != 'nonexistent') {
-    $lines[] = render(field_view_value('entityform', $entityform, 'field_number_employees', $field[0], array()));
-  }
-  else {
-    $field = field_get_items('entityform', $entityform, 'field_estimated_number_employees');
-    $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_number_employees', $field[0], array()));
-  }
-  $lines[] = '';
-  
-  $field = field_get_items('entityform', $entityform, 'field_has_accountant');
-  $lines[] = '<span '. $style_span .'>'. t('Le client a déjà un cabinet comptable?') .':</span>';
-  $lines[] = render(field_view_value('entityform', $entityform, 'field_has_accountant', $field[0], array()));
-  $lines[] = '';
-  
-  // If it has an accountant.
-  if ($field[0]['value']) {
-    $lines[] = '<span '. $style_span .'>'. t('Raison pour changer de cabinet comptable') .':</span>';
-    
-    $field = field_get_items('entityform', $entityform, 'field_change_accountant_reason');
-    if ($field[0]['value'] != 'other') {
-      $lines[] = render(field_view_value('entityform', $entityform, 'field_change_accountant_reason', $field[0], array()));
-    }
-    else {
-      $field = field_get_items('entityform', $entityform, 'field_change_accountant_other');
-      $lines[] = render(field_view_value('entityform', $entityform, 'field_change_accountant_other', $field[0], array()));
-    }
-    $lines[] = '';
+  switch ($entityform->type) {
+    case 'comptable':
+      $field = field_get_items('entityform', $entityform, 'field_legal_status');
+      $lines[] = '<span '. $style_span .'>'. t('Statut juridique') .':</span>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_legal_status', $field[0], array()));
+      $lines[] = '';
+
+      $field = field_get_items('entityform', $entityform, 'field_desired_benefits');
+      $lines[] = '<span '. $style_span .'>'. t('Prestations souhaitées') .':</span>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_desired_benefits', $field[0], array()));
+      $lines[] = '';
+
+      $field = field_get_items('entityform', $entityform, 'field_info_extra');
+      if (trim($field[0]['value'])) {
+        $lines[] = '<span '. $style_span .'>'. t("Plus d'information concernant la demande") .':</span>';
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_info_extra', $field[0], array()));
+        $lines[] = '';
+      }
+
+      $field = field_get_items('entityform', $entityform, 'field_activity');
+      $lines[] = '<span '. $style_span .'>'. t('Activité ou profession') .':</span>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_activity', $field[0], array()));
+      $lines[] = '';
+
+      $field = field_get_items('entityform', $entityform, 'field_annual_revenue');
+      $lines[] = '<span '. $style_span .'>'. t("Chiffre d'affaires") .':</span>';
+      if ($field[0]['value'] != 'nonexistent') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_annual_revenue', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_estimated_annual_revenue');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_annual_revenue', $field[0], array())) . ' €';
+      }
+      $lines[] = '';
+
+      $field = field_get_items('entityform', $entityform, 'field_annual_invoice');
+      $lines[] = '<span '. $style_span .'>'. t("Nombre annuel de factures d'achat et de vente à traiter") .':</span>';
+      if ($field[0]['value'] != 'nonexistent') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_annual_invoice', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_estimated_annual_invoice');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_annual_invoice', $field[0], array()));
+      }
+      $lines[] = '';
+
+      $field = field_get_items('entityform', $entityform, 'field_number_employees');
+      $lines[] = '<span '. $style_span .'>'. t('Taille de la structure (salariés + administrateurs)') .':</span>';
+      if ($field[0]['value'] != 'nonexistent') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_number_employees', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_estimated_number_employees');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_estimated_number_employees', $field[0], array()));
+      }
+      $lines[] = '';
+
+      $field = field_get_items('entityform', $entityform, 'field_has_accountant');
+      $lines[] = '<span '. $style_span .'>'. t('Le client a déjà un cabinet comptable?') .':</span>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_has_accountant', $field[0], array()));
+      $lines[] = '';
+
+      // If it has an accountant.
+      if ($field[0]['value']) {
+        $lines[] = '<span '. $style_span .'>'. t('Raison pour changer de cabinet comptable') .':</span>';
+
+        $field = field_get_items('entityform', $entityform, 'field_change_accountant_reason');
+        if ($field[0]['value'] != 'other') {
+          $lines[] = render(field_view_value('entityform', $entityform, 'field_change_accountant_reason', $field[0], array()));
+        }
+        else {
+          $field = field_get_items('entityform', $entityform, 'field_change_accountant_other');
+          $lines[] = render(field_view_value('entityform', $entityform, 'field_change_accountant_other', $field[0], array()));
+        }
+        $lines[] = '';
+      }
+      break;
+      
+    case 'budget_photographer':
+      $field = field_get_items('entityform', $entityform, 'field_event_type');
+      $lines[] = '<span '. $style_span .'>'. t('Event type') .':</span>';
+      if ($field[0]['value'] != 'other') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_event_type', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_event_type_other');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_event_type_other', $field[0], array()));
+      }
+      $lines[] = '';
+      
+      $field = field_get_items('entityform', $entityform, 'field_event_attendees');
+      $lines[] = '<span '. $style_span .'>'. t('Event attendees') .':</span>';
+      if ($field[0]['value'] != 'other') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_event_attendees', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_event_attendees_other');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_event_attendees_other', $field[0], array()));
+      }
+      $lines[] = '';
+      
+      $field = field_get_items('entityform', $entityform, 'field_photo_style');
+      $lines[] = '<span '. $style_span .'>'. t('Photo style') .':</span>';
+      if ($field[0]['value'] != 'other') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_style', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_photo_style_other');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_style_other', $field[0], array()));
+      }
+      $lines[] = '';
+      
+      $field = field_get_items('entityform', $entityform, 'field_photo_format');
+      $lines[] = '<span '. $style_span .'>'. t('Photo format') .':</span>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format', $field[0], array()));
+      $lines[] = '';
+      
+      $field = field_get_items('entityform', $entityform, 'field_photo_budget');
+      $lines[] = '<span '. $style_span .'>'. t('Budget') .':</span>';
+      if ($field[0]['value'] != 'other') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_budget', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_photo_budget_other');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_budget_other', $field[0], array()));
+      }
+      $lines[] = '';
+      break;
+      
+      $field = field_get_items('entityform', $entityform, 'field_event_date');
+      $lines[] = '<span '. $style_span .'>'. t('Date') .':</span>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_event_date', $field[0], array()));
+      $lines[] = '';
+      
+      $field = field_get_items('entityform', $entityform, 'field_photo_hours');
+      $lines[] = '<span '. $style_span .'>'. t('Hours') .':</span>';
+      $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_hours', $field[0], array()));
+      $lines[] = '';
+      
+      $field = field_get_items('entityform', $entityform, 'field_info_extra');
+      if (trim($field[0]['value'])) {
+        $lines[] = '<span '. $style_span .'>'. t("Plus d'information concernant la demande") .':</span>';
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_info_extra', $field[0], array()));
+        $lines[] = '';
+      }
   }
   
   $lang = key($entityform->field_adresse);
