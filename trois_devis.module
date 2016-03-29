@@ -1191,6 +1191,15 @@ function trois_devis_get_product_key_from_type($entityform_type, $variable) {
   return $product_key;
 }
 
+/**
+ * Determines if the user has the billing address already set.
+ *
+ * Used in rules: rules_provider_profile_link_to_address_book
+ * Used in rules: rules_provider_profile_link_to_cards
+ *
+ * @param $uid the id of the user.
+ * @param $type the type of the commerce address: 'billing'.
+ */
 function trois_devis_user_has_address_set($uid, $type) {
   $profile_id = commerce_addressbook_get_default_profile_id($uid, $type);
   $profile = commerce_customer_profile_load($profile_id);
@@ -1202,6 +1211,37 @@ function trois_devis_user_has_address_set($uid, $type) {
     return (!empty($profile->commerce_customer_address[$lang][0]['postal_code'])) ? TRUE : FALSE;
   }
   return FALSE;
+}
+
+/**
+ * Determines if an user has its profile active or not,
+ * regardless of its type of provider.
+ *
+ * Used in rules: rules_provider_profile_link_to_profile
+ * Used in rules: rules_provider_profile_link_to_address_book
+ * Used in rules: rules_provider_profile_link_to_cards
+ *
+ * @param $account the account.
+ * @return TRUE if the profile is set, FALSE otherwise.
+ */
+function trois_devis_user_profile_is_active($account) {
+  $profile = profile2_load_by_user($account);
+  $active = FALSE;
+  $provider_type_field = field_get_items('user', $account, 'field_provider_type');
+  switch ($provider_type_field[0]['tid']) {
+    // Accountant
+    case 10:
+    case 11:
+      if (isset($profile['budget_profile'])) $active = TRUE;
+      break;
+
+    // Photographer
+    case 12:
+    case 13:
+      if (isset($profile['budget_p_photographer'])) $active = TRUE;
+      break;
+  }
+  return $active;
 }
 
 /**
@@ -1795,6 +1835,19 @@ function trois_devis_get_entityform_label($type, $ucwords = TRUE) {
   }
   if ($ucwords) $string = ucwords($string);
   return t('@type', array('@type' => $string));
+}
+
+/**
+ * Get the provider type label based on the account.
+ * @param $account the account.
+ * @param $ucwords if TRUE, returns the string with ucwords applied.
+ * @return the provider type label.
+ */
+function trois_devis_get_user_provider_type_label($account, $ucwords = TRUE) {
+  $provider_type_field = field_get_items('user', $account, 'field_provider_type');
+  $taxonomy = taxonomy_term_load($provider_type_field[0]['tid']);
+  $string = (!$ucwords) ? strtolower($taxonomy->name) : $taxonomy->name;
+  return $string;
 }
 
 function trois_devis_entityform_email_data($entityform, $plain_text = FALSE) {
