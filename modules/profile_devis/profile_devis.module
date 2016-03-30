@@ -148,20 +148,36 @@ function profile_devis_form_profile_devis_user_profile_form_alter(&$form, &$form
         if (!isset($form_state["profiles"])) {
           $form_state["profiles"] = array();
         }
-        $add_form = FALSE;
-        // Depending on the profile of the provider, we add one form or the other.
-        switch ($profile->type) {
-          case 'budget_profile':
-            if ($provider_type_id == 10 || $provider_type_id == 11) $add_form = TRUE;
-            break;
-            
-          case 'budget_p_photographer':
-            if ($provider_type_id == 12 || $provider_type_id == 13) $add_form = TRUE;
-            break;
-        }
-        if ($add_form) {
-          $form_state['profiles'][$profile->type] = $profile;
-          profile2_attach_form($form, $form_state);
+        $form_state['profiles'][$profile->type] = $profile;
+        profile2_attach_form($form, $form_state);
+        
+        // Get the valid children from the profile form.
+        $children = element_children($form['profile_budget_profile']);
+        // List all the default fields to ignore them.
+        $ignore = array(
+          'field_active_regions_belgium', 'field_language',
+          'field_contacted_this_month', 'field_contacted_total', 'field_entity_devis_ref',
+          'field_accepted_this_month', 'field_accepted_total', 'field_entity_devis_ref_accepted', 
+          'redirect',
+        );
+        // Define valid fields for each profile type.
+        $valid_accountant = array('field_type_of_clients');
+        $valid_photographer = array('field_service_photographer');
+        // For all the fields in profile, allow only those for each profile.
+        foreach ($children as $key) {
+          if (in_array($key, $ignore)) continue;
+          $form['profile_budget_profile'][$key]['#access'] = FALSE;
+          switch ($provider_type_id) {
+            case 10:
+            case 11:
+              if (in_array($key, $valid_accountant)) $form['profile_budget_profile'][$key]['#access'] = TRUE;
+              break;
+
+            case 12:
+            case 13:
+              if (in_array($key, $valid_photographer)) $form['profile_budget_profile'][$key]['#access'] = TRUE;
+              break;
+          }
         }
       }
     }
