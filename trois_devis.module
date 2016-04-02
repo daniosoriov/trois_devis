@@ -354,39 +354,94 @@ function trois_devis_show_info($hash, $accept = FALSE) {
   // Everything is correct, render the entityform.
   $entity = entity_view('entityform', array($entityform), 'budget_info', NULL, TRUE);
   
-  // Fix the layout for estimated values.
-  if (isset($entity['entityform'][$entityform_id]['field_estimated_annual_revenue']) && 
-      $entity['entityform'][$entityform_id]['field_annual_revenue']['#items'][0]['value'] == 'nonexistent') {
-    $entity['entityform'][$entityform_id]['field_annual_revenue'][0]['#markup'] .= ' '.
-      $entity['entityform'][$entityform_id]['field_estimated_annual_revenue'][0]['#markup'];
-    $entity['entityform'][$entityform_id]['field_estimated_annual_revenue']['#access'] = FALSE;
+  switch ($entityform->type) {
+    case 'comptable':
+      // Fix the layout for estimated values.
+      if (isset($entity['entityform'][$entityform_id]['field_estimated_annual_revenue']) && 
+          $entity['entityform'][$entityform_id]['field_annual_revenue']['#items'][0]['value'] == 'nonexistent') {
+        $entity['entityform'][$entityform_id]['field_annual_revenue'][0]['#markup'] .= ' '.
+          $entity['entityform'][$entityform_id]['field_estimated_annual_revenue'][0]['#markup'];
+        $entity['entityform'][$entityform_id]['field_estimated_annual_revenue']['#access'] = FALSE;
+      }
+      if (isset($entity['entityform'][$entityform_id]['field_estimated_annual_invoice']) && 
+          $entity['entityform'][$entityform_id]['field_annual_invoice']['#items'][0]['value'] == 'nonexistent') {
+        $entity['entityform'][$entityform_id]['field_annual_invoice'][0]['#markup'] .= ' '.
+          $entity['entityform'][$entityform_id]['field_estimated_annual_invoice'][0]['#markup'];
+        $entity['entityform'][$entityform_id]['field_estimated_annual_invoice']['#access'] = FALSE;
+      }
+      if (isset($entity['entityform'][$entityform_id]['field_estimated_number_employees']) && 
+          $entity['entityform'][$entityform_id]['field_number_employees']['#items'][0]['value'] == 'nonexistent') {
+        $entity['entityform'][$entityform_id]['field_number_employees'][0]['#markup'] .= ' '.
+          $entity['entityform'][$entityform_id]['field_estimated_number_employees'][0]['#markup'];
+        $entity['entityform'][$entityform_id]['field_estimated_number_employees']['#access'] = FALSE;
+      }
+      // Fix the has accountant reason.
+      if (isset($entity['entityform'][$entityform_id]['field_change_accountant_reason']) && 
+          $entity['entityform'][$entityform_id]['field_change_accountant_reason']['#items'][0]['value'] == 'other') {
+        $entity['entityform'][$entityform_id]['field_change_accountant_reason'][0]['#markup'] = ' '.
+          $entity['entityform'][$entityform_id]['field_change_accountant_other'][0]['#markup'];
+        $entity['entityform'][$entityform_id]['field_change_accountant_other']['#access'] = FALSE;
+      }
+
+      // Add the description to the desired benefits field.
+      if (isset($entity['entityform'][$entityform_id]['field_desired_benefits'])) {
+        $full = t('tenue de la comptabilité, bilan, déclarations de TVA et d’impôts, conseils en fiscalité');
+        $part = t("création d'entreprise, plan financier, budget, business plan");
+        $desired_benefits = $entity['entityform'][$entityform_id]['field_desired_benefits']['#items'][0]['value'];
+        $desc = ($desired_benefits == 'full') ? $full : $part;
+        $entity['entityform'][$entityform_id]['field_desired_benefits'][0]['#markup'] .= ' ('. $desc .')';
+      }
+      break;
+      
+    case 'budget_photographer':
+      // Fix other and estimated values.
+      if (isset($entity['entityform'][$entityform_id]['field_event_type_other']) && 
+          $entity['entityform'][$entityform_id]['field_event_type']['#items'][0]['value'] == 'other') {
+        $entity['entityform'][$entityform_id]['field_event_type'][0]['#markup'] = ' '.
+          $entity['entityform'][$entityform_id]['field_event_type_other'][0]['#markup'];
+        $entity['entityform'][$entityform_id]['field_event_type_other']['#access'] = FALSE;
+      }
+      if (isset($entity['entityform'][$entityform_id]['field_photo_copyright_other'])) {
+        foreach ($entity['entityform'][$entityform_id]['field_photo_copyright']['#items'] as $k => $v) {
+          if ($v['value'] == 'other') {
+            $entity['entityform'][$entityform_id]['field_photo_copyright'][$k]['#markup'] = ' '.
+              $entity['entityform'][$entityform_id]['field_photo_copyright_other'][0]['#markup'];
+          }
+        }
+        $entity['entityform'][$entityform_id]['field_photo_copyright_other']['#access'] = FALSE;
+      }
+      if (isset($entity['entityform'][$entityform_id]['field_wedding_coverage_other'])) {
+        foreach ($entity['entityform'][$entityform_id]['field_wedding_coverage']['#items'] as $k => $v) {
+          if ($v['value'] == 'other') {
+            $entity['entityform'][$entityform_id]['field_wedding_coverage'][$k]['#markup'] = ' '.
+              $entity['entityform'][$entityform_id]['field_wedding_coverage_other'][0]['#markup'];
+          }
+        }
+        $entity['entityform'][$entityform_id]['field_wedding_coverage_other']['#access'] = FALSE;
+      }
+      if (isset($entity['entityform'][$entityform_id]['field_event_attendees_other']) && 
+          $entity['entityform'][$entityform_id]['field_event_attendees']['#items'][0]['value'] == 'other') {
+        $entity['entityform'][$entityform_id]['field_event_attendees'][0]['#markup'] .= ' '.
+          $entity['entityform'][$entityform_id]['field_event_attendees_other'][0]['#markup'];
+        $entity['entityform'][$entityform_id]['field_event_attendees_other']['#access'] = FALSE;
+      }
+      if (isset($entity['entityform'][$entityform_id]['field_photo_format_other'])) {
+        foreach ($entity['entityform'][$entityform_id]['field_photo_format']['#items'] as $k => $v) {
+          if ($v['value'] == 'other') {
+            $entity['entityform'][$entityform_id]['field_photo_format'][$k]['#markup'] = ' '.
+              $entity['entityform'][$entityform_id]['field_photo_format_other'][0]['#markup'];
+          }
+        }
+        $entity['entityform'][$entityform_id]['field_photo_format_other']['#access'] = FALSE;
+      }
+      if (isset($entity['entityform'][$entityform_id]['field_photo_budget_other']) && 
+          $entity['entityform'][$entityform_id]['field_photo_budget']['#items'][0]['value'] == 'other') {
+        $entity['entityform'][$entityform_id]['field_photo_budget'][0]['#markup'] .= ' '.
+          $entity['entityform'][$entityform_id]['field_photo_budget_other'][0]['#markup'];
+        $entity['entityform'][$entityform_id]['field_photo_budget_other']['#access'] = FALSE;
+      }
+      break;
   }
-  if (isset($entity['entityform'][$entityform_id]['field_estimated_annual_invoice']) && 
-      $entity['entityform'][$entityform_id]['field_annual_invoice']['#items'][0]['value'] == 'nonexistent') {
-    $entity['entityform'][$entityform_id]['field_annual_invoice'][0]['#markup'] .= ' '.
-      $entity['entityform'][$entityform_id]['field_estimated_annual_invoice'][0]['#markup'];
-    $entity['entityform'][$entityform_id]['field_estimated_annual_invoice']['#access'] = FALSE;
-  }
-  if (isset($entity['entityform'][$entityform_id]['field_estimated_number_employees']) && 
-      $entity['entityform'][$entityform_id]['field_number_employees']['#items'][0]['value'] == 'nonexistent') {
-    $entity['entityform'][$entityform_id]['field_number_employees'][0]['#markup'] .= ' '.
-      $entity['entityform'][$entityform_id]['field_estimated_number_employees'][0]['#markup'];
-    $entity['entityform'][$entityform_id]['field_estimated_number_employees']['#access'] = FALSE;
-  }
-  // Fix the has accountant reason.
-  if (isset($entity['entityform'][$entityform_id]['field_change_accountant_reason']) && 
-      $entity['entityform'][$entityform_id]['field_change_accountant_reason']['#items'][0]['value'] == 'other') {
-    $entity['entityform'][$entityform_id]['field_change_accountant_reason'][0]['#markup'] = ' '.
-      $entity['entityform'][$entityform_id]['field_change_accountant_other'][0]['#markup'];
-    $entity['entityform'][$entityform_id]['field_change_accountant_other']['#access'] = FALSE;
-  }
-  
-  // Add the description to the desired benefits field.
-  $full = t('tenue de la comptabilité, bilan, déclarations de TVA et d’impôts, conseils en fiscalité');
-  $part = t("création d'entreprise, plan financier, budget, business plan");
-  $desired_benefits = $entity['entityform'][$entityform_id]['field_desired_benefits']['#items'][0]['value'];
-  $desc = ($desired_benefits == 'full') ? $full : $part;
-  $entity['entityform'][$entityform_id]['field_desired_benefits'][0]['#markup'] .= ' ('. $desc .')';
   
   // If we are displaying the full budget.
   if (!$accept) {
@@ -1074,9 +1129,6 @@ function trois_devis_entity_get_hash_list($entityform_id) {
 function _trois_devis_accept_budget($account, $entity) {
   $license = commerce_license_billing_get_master_license($account->uid);
   if ($license) {
-    $lang = key($entity->field_legal_status);
-    $legal_status = $entity->field_legal_status[$lang][0]['value'];
-    
     $lang = key($entity->field_devis_product);
     $product_id = $entity->field_devis_product[$lang][0]['product_id'];
     $product = commerce_product_load($product_id);
@@ -1085,39 +1137,6 @@ function _trois_devis_accept_budget($account, $entity) {
     $usage_group = commerce_license_billing_usage_group($license, $product->sku);
     $usage_group->addUsage($license->revision_id, 1);
   }
-}
-
-/**
- * Gets the group name for counting the usage.
- */
-function _trois_devis_budget_get_group_name($legal_status, $type = '') {
-  $group_name = 'accountant_budget_society';
-  switch ($legal_status) {
-    case 'society':
-      $group_name = 'accountant_budget_society';
-      break;
-    
-    case 'independent':
-      $group_name = 'accountant_budget_independent';
-      break;
-    
-    case 'independent_comp':
-      $group_name = 'accountant_budget_independent_comp';
-      break;
-    
-    case 'association':
-      $group_name = 'accountant_budget_association';
-      break;
-    
-    case 'nonexistent':
-      $group_name = 'accountant_budget_nonexistent';
-      break;
-    
-    case 'independent_plan':
-      $group_name = 'accountant_budget_independent_plan';
-      break;
-  }
-  return $group_name;
 }
 
 /**
@@ -1536,18 +1555,32 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
           // Copyrights.
           $field = field_get_items('entityform', $entityform, 'field_photo_copyright');
           $lines[] = '<span '. $style_span .'>'. t('Photo copyrights') .':</span>';
-          dpm($field, 'field_photo_copyright');
-          if ($field[0]['value'] != 'other') {
-            $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_copyright', $field[0], array()));
-          }
-          else {
-            $field = field_get_items('entityform', $entityform, 'field_photo_copyright_other');
-            $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_copyright_other', $field[0], array()));
+          foreach ($field as $key => $val) {
+            if ($val['value'] != 'other') {
+              $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_copyright', $field[$key], array()));
+            }
+            else {
+              $field = field_get_items('entityform', $entityform, 'field_photo_copyright_other');
+              $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_copyright_other', $field[0], array()));
+            }
           }
           $lines[] = '';
           break;
           
         case 'wedding':
+          // Wedding coverage.
+          $field = field_get_items('entityform', $entityform, 'field_wedding_coverage');
+          $lines[] = '<span '. $style_span .'>'. t('Wedding coverage') .':</span>';
+          foreach ($field as $key => $val) {
+            if ($val['value'] != 'other') {
+              $lines[] = render(field_view_value('entityform', $entityform, 'field_wedding_coverage', $field[$key], array()));
+            }
+            else {
+              $field = field_get_items('entityform', $entityform, 'field_wedding_coverage_other');
+              $lines[] = render(field_view_value('entityform', $entityform, 'field_wedding_coverage_other', $field[0], array()));
+            }
+          }
+          $lines[] = '';
           break;
       }
       
@@ -1564,12 +1597,14 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
       
       $field = field_get_items('entityform', $entityform, 'field_photo_format');
       $lines[] = '<span '. $style_span .'>'. t('Photo format') .':</span>';
-      if ($field[0]['value'] != 'other') {
-        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format', $field[0], array()));
-      }
-      else {
-        $field = field_get_items('entityform', $entityform, 'field_photo_format_other');
-        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format_other', $field[0], array()));
+      foreach ($field as $key => $val) {
+        if ($val['value'] != 'other') {
+          $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format', $field[$key], array()));
+        }
+        else {
+          $field = field_get_items('entityform', $entityform, 'field_photo_format_other');
+          $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format_other', $field[0], array()));
+        }
       }
       $lines[] = '';
       
@@ -1580,10 +1615,9 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
       }
       else {
         $field = field_get_items('entityform', $entityform, 'field_photo_budget_other');
-        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_budget_other', $field[0], array()));
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_budget_other', $field[0], array())) . ' €';
       }
       $lines[] = '';
-      break;
       
       $field = field_get_items('entityform', $entityform, 'field_event_date');
       $lines[] = '<span '. $style_span .'>'. t('Date') .':</span>';
@@ -1601,6 +1635,7 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
         $lines[] = render(field_view_value('entityform', $entityform, 'field_info_extra', $field[0], array()));
         $lines[] = '';
       }
+      break;
   }
   
   $lang = key($entityform->field_adresse);
@@ -1696,61 +1731,103 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
 }
 
 /**
- * Gets the printable version of the provider for the client requesting
- * a budget.
- * This function is used in rules: rules_budget_request_approval
+ * Creates the email layout for a requestor of a budget when some
+ * providers have accepted.
  */
-function trois_devis_get_user_name_for_email_to_client($user, $html = TRUE) {
-  if (!$user) return '';
+function trois_devis_get_mail_for_accepted_budget($account, $entityform, $account_list, $html = TRUE) {
   $lines = array();
-  $company = $website = '';
   
-  // Company.
-  $lang = key($user->field_company_name);
-  if (isset($user->field_company_name[$lang][0]['safe_value'])) {
-    $company = $user->field_company_name[$lang][0]['safe_value'];
-    $lines[] = (($company) ? $company : $user->realname);
+  $field = field_get_items('entityform', $entityform, 'field_prenom');
+  $tmp = render(field_view_value('entityform', $entityform, 'field_prenom', $field[0], array()));
+  $honorific = ($tmp == 'male') ? 'Cher Monsieur' : 'Chère Madame';
+  $field = field_get_items('entityform', $entityform, 'field_prenom');
+  $first_name = render(field_view_value('entityform', $entityform, 'field_prenom', $field[0], array()));
+  $field = field_get_items('entityform', $entityform, 'field_name');
+  $last_name = render(field_view_value('entityform', $entityform, 'field_name', $field[0], array()));
+  $lines[] = "{$honorific} {$first_name} {$last_name},";
+  $lines[] = '';
+  $amount = format_plural(count($account_list), 'un devis gratuit', '@count devis gratuits');
+  $lines[] = t('Vous recevrez @amount de la part de:', array('@amount' => $amount));
+  
+  $list = '';
+  foreach ($account_list as $account) {
+    $list .= '<br /><li>'. trois_devis_get_user_name_for_email_to_client($account) .'</li>';
   }
-  
-  // Address.
-  $lang = key($user->field_adresse);
-  if (isset($user->field_adresse[$lang][0])) {
-    $address = $user->field_adresse[$lang][0];
-    $lines[] = $address['thoroughfare'] .', '. $address['postal_code'] .', '. $address['locality'];
+  $precision = '';
+  switch ($entityform->type) {
+    case 'comptable':
+      $precision = t('Pour plus de precision concernant votre demande, il se peut que vous soyez contacté par les cabinets comptables.');
+      break;
+      
+    case 'budget_photographer':
+      $precision = t('Pour plus de precision concernant votre demande, il se peut que vous soyez contacté par les photographes.');
+      break;
   }
-  
-  // Phone.
-  $lang = key($user->field_phone_belgium);
-  if (isset($user->field_phone_belgium[$lang][0]['value'])) {
-    $lines[] = t('Tél') .' : '. $user->field_phone_belgium[$lang][0]['value'];
+  $lines[] = '<ul>'. $list .'</ul>'. $precision;
+  $lines[] = '';
+  $entityform_number = trois_devis_get_entityform_print_id($entityform);
+  $lines[] = t("Le numéro d'identifiant de votre demande est @number", array('@number' => $entityform_number));
+  $lines[] = '';
+  $lines[] = 'Cordialement';
+  $lines[] = '';
+  $site_name = variable_get('site_name', '3devis');
+  $lines[] = t("L'équipe de @site_name", array('@site_name' => $site_name));
+  if ($entityform->type == 'comptable') {
+    $lines[] = '';
+    $lines[] = '<span class="reference_small">* IPCF : Institut Professionnel des Comptables et Fiscalistes Agréés – IEC : Institut des Experts-comptables et des Conseils Fiscaux.</span>';
   }
-  
-  // Website.
-  $lang = key($user->field_website);
-  if (isset($user->field_website[$lang][0]['url'])) {
-    $web = $user->field_website[$lang][0]['url'];
-    $pos = strpos($web, 'http://');
-    $url = ($pos === false) ? 'http://'. $web : $web;
-    $website = l($user->field_website[$lang][0]['url'], $url, array('attributes' => array('external' => TRUE, 'absolute' => TRUE))); 
-    $lines[] = ($website) ? $website : '';
-  }
-  
-  $lang = key($user->field_staff_number);
-  if (isset($user->field_staff_number[$lang][0]['value'])) {
-    $lines[] = t('Nombre de collaborateurs') .' : '. $user->field_staff_number[$lang][0]['value'];
-  }
-  
-  $lang = key($user->field_number_ipcf_iec);
-  if (isset($user->field_number_ipcf_iec[$lang][0]['value'])) {
-    $lines[] = t('N° membre IPCF/IEC') .'* : '. $user->field_number_ipcf_iec[$lang][0]['value'];
-  }
-  
   $return = implode('<br />', $lines);
   if (!$html) {
     $return = str_ireplace('<br />', "\r\n", $return);
     $return = strip_tags($return) ."\r\n";
   }
   return $return;
+}
+
+/**
+ * Gets the printable version of the provider for the client requesting
+ * a budget.
+ * This function is used in rules: rules_budget_request_approval
+ */
+function trois_devis_get_user_name_for_email_to_client($user) {
+  if (!$user) return '';
+  $lines = array();
+  $company = $website = '';
+  
+  $field = field_get_items('user', $user, 'field_company_name');
+  $lines[] = ($field[0]) ? render(field_view_value('user', $user, 'field_company_name', $field[0], array())) : $user->realname;
+  $field_address = field_get_items('user', $user, 'field_adresse');
+  $field = field_get_items('user', $user, 'field_phone_belgium');
+  $lines[] = render(field_view_value('user', $user, 'field_adresse', $field_address[0], array())) . 
+    render(field_view_value('user', $user, 'field_phone_belgium', $field[0], array()));
+  $provider_type_field = field_get_items('user', $user, 'field_provider_type');
+  switch ($provider_type_field[0]['tid']) {
+    case 10:
+    case 11:
+      $field = field_get_items('user', $user, 'field_website');
+      if ($field[0]) {
+        $lines[] = render(field_view_value('user', $user, 'field_website', $field[0], array()));
+      }
+      $field = field_get_items('user', $user, 'field_staff_number');
+      $lines[] = t('Nombre de collaborateurs') .' : '. render(field_view_value('user', $user, 'field_staff_number', $field[0], array()));
+      $field = field_get_items('user', $user, 'field_number_ipcf_iec');
+      $lines[] = t('N° membre IPCF/IEC') .'* : '. render(field_view_value('user', $user, 'field_number_ipcf_iec', $field[0], array()));
+      break;
+      
+    case 12:
+    case 13:
+      $field = field_get_items('user', $user, 'field_website');
+      $lines[] = t('Portfolio') .' : '. render(field_view_value('user', $user, 'field_website', $field[0], array()));
+      $field = field_get_items('user', $user, 'field_social_link');
+      foreach ($field as $k => $v) {
+        //$lines[] = $v['service'] .' : '. $v['url'];
+      }
+      $field = field_get_items('user', $user, 'field_years_experience');
+      //$lines[] = t('Years of experience') .' : '. render(field_view_value('user', $user, 'field_years_experience', $field[0], array()));
+      break;
+  }
+  
+  return implode('<br />', $lines);
 }
 
 /**
