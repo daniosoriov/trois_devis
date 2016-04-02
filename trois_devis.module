@@ -1519,7 +1519,8 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
     case 'budget_photographer':
       $field = field_get_items('entityform', $entityform, 'field_event_type');
       $lines[] = '<span '. $style_span .'>'. t('Event type') .':</span>';
-      if ($field[0]['value'] != 'other') {
+      $event_type = $field[0]['value'];
+      if ($event_type != 'other') {
         $lines[] = render(field_view_value('entityform', $entityform, 'field_event_type', $field[0], array()));
       }
       else {
@@ -1527,6 +1528,28 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
         $lines[] = render(field_view_value('entityform', $entityform, 'field_event_type_other', $field[0], array()));
       }
       $lines[] = '';
+      
+      switch ($event_type) {
+          // If the event is corporate or conference.
+        case 'corporate':
+        case 'conference':
+          // Copyrights.
+          $field = field_get_items('entityform', $entityform, 'field_photo_copyright');
+          $lines[] = '<span '. $style_span .'>'. t('Photo copyrights') .':</span>';
+          dpm($field, 'field_photo_copyright');
+          if ($field[0]['value'] != 'other') {
+            $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_copyright', $field[0], array()));
+          }
+          else {
+            $field = field_get_items('entityform', $entityform, 'field_photo_copyright_other');
+            $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_copyright_other', $field[0], array()));
+          }
+          $lines[] = '';
+          break;
+          
+        case 'wedding':
+          break;
+      }
       
       $field = field_get_items('entityform', $entityform, 'field_event_attendees');
       $lines[] = '<span '. $style_span .'>'. t('Event attendees') .':</span>';
@@ -1539,20 +1562,15 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
       }
       $lines[] = '';
       
-      $field = field_get_items('entityform', $entityform, 'field_photo_style');
-      $lines[] = '<span '. $style_span .'>'. t('Photo style') .':</span>';
-      if ($field[0]['value'] != 'other') {
-        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_style', $field[0], array()));
-      }
-      else {
-        $field = field_get_items('entityform', $entityform, 'field_photo_style_other');
-        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_style_other', $field[0], array()));
-      }
-      $lines[] = '';
-      
       $field = field_get_items('entityform', $entityform, 'field_photo_format');
       $lines[] = '<span '. $style_span .'>'. t('Photo format') .':</span>';
-      $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format', $field[0], array()));
+      if ($field[0]['value'] != 'other') {
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format', $field[0], array()));
+      }
+      else {
+        $field = field_get_items('entityform', $entityform, 'field_photo_format_other');
+        $lines[] = render(field_view_value('entityform', $entityform, 'field_photo_format_other', $field[0], array()));
+      }
       $lines[] = '';
       
       $field = field_get_items('entityform', $entityform, 'field_photo_budget');
@@ -1915,19 +1933,18 @@ function trois_devis_entityform_email_data($entityform, $plain_text = FALSE) {
 }
 
 /**
- * THIS IS NOT WORKING !!
+ * Implements hook_date_combo_process_alter().
+ *
+ * Based on: https://www.drupal.org/node/1250626
+ * This is used to change the date of the field date.
  */
-function trois_devis_date_part_label_date(&$vars) {
-  if ($vars['element']['#field']['field_name'] == 'field_event_date') {
-    if ($vars['element']['#date_title'] == 'Date Start date') {
-      return t('Event Date');
-    } elseif ($vars['element']['#date_title'] == 'Date End date') {
-      return t('Event Date To :)');
-    }
-  } else {
-    return t($vars['element']['#date_title']);
+function trois_devis_date_combo_process_alter(&$element, $form_state, $context) {
+  if ('' == $element['#field_name']) {
+    $element['value']['#date_title'] = '';
+    $element['value2']['#date_title'] = '';
   }
 }
+
 
 /**
  * This is a fix to a problem when invoicing that the line items are
