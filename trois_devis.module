@@ -455,11 +455,29 @@ function trois_devis_show_info($hash, $accept = FALSE) {
       ->isNull('date')
       ->execute();
     
-    // Hide the two fields that were protected for emails.
-    $entity['entityform'][$entityform_id]['field_info_extra']['#access'] = FALSE;
-    $entity['entityform'][$entityform_id]['field_activity']['#access'] = FALSE;
-    $entity['entityform'][$entityform_id]['field_info_extra_admin']['#access'] = TRUE;
-    $entity['entityform'][$entityform_id]['field_activity_admin']['#access'] = TRUE;
+    switch ($entityform->type) {
+      case 'comptable':
+        // Hide the two fields that were protected for emails.
+        $entity['entityform'][$entityform_id]['field_info_extra']['#access'] = FALSE;
+        $entity['entityform'][$entityform_id]['field_activity']['#access'] = FALSE;
+        $entity['entityform'][$entityform_id]['field_info_extra_admin']['#access'] = TRUE;
+        $entity['entityform'][$entityform_id]['field_activity_admin']['#access'] = TRUE;
+        
+        // Change Society or Association depending on the legal status.
+        $legal_status = $entity['entityform'][$entityform_id]['field_legal_status']['#items'][0]['value'];
+        if ($legal_status == 'society') {
+          $entity['entityform'][$entityform_id]['field_company_name']['#title'] = t('Société');
+        }
+        elseif ($legal_status == 'association') {
+          $entity['entityform'][$entityform_id]['field_company_name']['#title'] = t('Association');
+        }
+        break;
+        
+      case 'budget_photographer':
+        $entity['entityform'][$entityform_id]['field_info_extra']['#access'] = FALSE;
+        $entity['entityform'][$entityform_id]['field_info_extra_admin']['#access'] = TRUE;
+        break;
+    }
     
     $entity['entityform'][$entityform_id]['code_postal']['#access'] = FALSE;
     
@@ -471,21 +489,8 @@ function trois_devis_show_info($hash, $accept = FALSE) {
     $first_name = $entity['entityform'][$entityform_id]['field_prenom'][0]['#markup'];
     $last_name = $entity['entityform'][$entityform_id]['field_name'][0]['#markup'];
     $entity['entityform'][$entityform_id]['field_name'][0]['#markup'] = $honorific .' '. $first_name .' '. $last_name;
-  
-    // Change Society or Association depending on the legal status.
-    $legal_status = $entity['entityform'][$entityform_id]['field_legal_status']['#items'][0]['value'];
-    if ($legal_status == 'society') {
-      $entity['entityform'][$entityform_id]['field_company_name']['#title'] = t('Société');
-    }
-    elseif ($legal_status == 'association') {
-      $entity['entityform'][$entityform_id]['field_company_name']['#title'] = t('Association');
-    }
-    
-    $budget_nr = trois_devis_get_entityform_print_id($entityform);
     
     // Extra fieldset.
-    // Budget Number.
-    $entity['entityform'][$entityform_id]['budget_number'][0]['#markup'] = $budget_nr;
     // Contacted date.
     $entity['entityform'][$entityform_id]['budget_contacted_date'][0]['#markup'] = format_date($info->contacted, 'long');
     // Put the date of acceptance.
@@ -494,7 +499,7 @@ function trois_devis_show_info($hash, $accept = FALSE) {
     $entity['entityform'][$entityform_id]['accepted_date'][0]['#markup'] = format_date($date, 'long');
     
     // Fix the title of the page.
-    $title = t('Détails de la demande de devis n° @id', array('@id' => $budget_nr));
+    $title = t('Détails de la demande de devis n° @id', array('@id' => trois_devis_get_entityform_print_id($entityform)));
     
     // Small breadcrumb for user.
     $url = l(t('My requests'), 'user/'. $info->uid .'/demandes');
@@ -1734,7 +1739,7 @@ function trois_devis_create_entityform_template($entityform, $account = NULL, $m
  * Creates the email layout for a requestor of a budget when some
  * providers have accepted.
  */
-function trois_devis_get_mail_for_accepted_budget($account, $entityform, $account_list, $html = TRUE) {
+function trois_devis_get_mail_for_accepted_budget($account_list, $entityform, $html = TRUE) {
   $lines = array();
   
   $field = field_get_items('entityform', $entityform, 'field_prenom');
