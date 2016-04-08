@@ -2074,6 +2074,93 @@ function trois_devis_fix_product_price($line_item, $fix = FALSE) {
   return $check;
 }
 
+/**
+ * This function creates programmatically the products to add for a certain service.
+ * It is important to verify all the data before calling it and the format on how
+ * to pass the data is specified here as an example. The idea is that this function
+ * is only called from rules and not from code.
+ *
+ * used in rules: rules_create_products_programmatically
+ * Examples:
+ *
+sku|compt_asoc_[break]
+title|Demande de devis - Association[break]
+field_devis_type|1[break]
+field_event_type|society[break]
+ *
+sku|photo_birthday_[break]
+title|Demande de devis - Anniversaire[break]
+field_devis_type|14[break]
+field_event_type|birthday[break]
+ *
+ */
+function trois_devis_create_products_programmatically($data = array(), $live = FALSE) {
+  dpm($data, 'Data sent');
+  dpm($live, 'Live?');
+  $tmp = explode('[break]', $data['value']);
+  $data = array();
+  foreach ($tmp as $k) {
+    if (empty($k)) continue;
+    $val = explode('|', $k);
+    $data[trim($val[0])] = trim($val[1]);
+  }
+  dpm($data, 'Data transformed');
+  
+  $example_product = commerce_product_load(76);
+  dpm($example_product, 'Accountant product example');
+  $example_product = commerce_product_load(202);
+  dpm($example_product, 'Photographer product example');
+  
+  $prices = array('0250', '0300', '0350', '0400', '0450', '0500', '0550', '0600', 
+                    '0650', '0700', '0750', '0800', '0850', '0900', '0950', '1000',
+                    '1250', '1500', '1750', '2000', 
+                    '2250', '2500', '2750', '3000', 
+                    '3250', '3500', '3750', '4000', 
+                    '4250', '4500', '4750', '5000');
+  
+  if ($data) {
+    foreach ($prices as $price) {
+      $sku = $data['sku'] . $price;
+      $product_exists = commerce_product_load_by_sku($sku);
+      if ($product_exists) {
+        dpm($product_exists, 'Product already exists: '. $sku);
+        continue 1;
+      }
+      // Product
+      $product = commerce_product_new('product');
+      $product->sku = $sku;
+      $product->title = $data['title'];
+      $product->language = LANGUAGE_NONE;
+      $product->uid = 1;
+      $product->type = 'devis';
+      $product->commerce_price[LANGUAGE_NONE][0] = array(
+        'amount' => intval($price),
+        'currency_code' => 'EUR',
+      );
+      $product->field_devis_type[LANGUAGE_NONE][0]['tid'] = $data['field_devis_type'];
+      switch ($data['field_devis_type']) {
+        // Accountant
+        case 1:
+        case 2:
+          $product->field_legal_status[LANGUAGE_NONE][0]['value'] = $data['field_legal_status'];
+          break;
+          
+        // Photographer
+        case 14:
+        case 15:
+          $product->field_event_type[LANGUAGE_NONE][0]['value'] = $data['field_event_type'];
+          break;
+      }
+      $string = 'Product to create: ';
+      if ($live) {
+        $string = 'Product created: ';
+        commerce_product_save($product);
+      }
+      dpm($product, $string . $sku);
+    }
+  }
+}
+
 
 
 
