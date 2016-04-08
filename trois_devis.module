@@ -2075,6 +2075,40 @@ function trois_devis_fix_product_price($line_item, $fix = FALSE) {
 }
 
 /**
+ * Gets the contacted providers to print on a notification for the admin.
+ * It separates the list of active providers and limbo providers.
+ *
+ * Used in rules: rules_budget_request_approval_new
+ * Used in rules: rules_budget_request_photographer_approval
+ *
+ */
+function trois_devis_get_contacted_providers($account_list, $account_list_limbo = array(), $plain_text = FALSE) {
+  $lines = array();
+  $lines[] = 'Contacted '. format_plural(count($account_list), '1 provider', '@count providers') .':';
+  $lines[] = '';  
+  $list = array();
+  foreach ($account_list as $account) {
+    $list[$account->realname] = '<a href="user/'. $account->uid .'">'. $account->realname .'</a>';
+  }
+  ksort($list);
+  $lines[] = implode($list, ', ') .'.';
+  
+  if ($account_list_limbo) {
+    $lines[] = '';
+    $lines[] = 'Contacted '. format_plural(count($account_list_limbo), '1 limbo provider', '@count limbo providers') .':';
+    $lines[] = '';
+    $list = array();
+    foreach ($account_list_limbo as $account) {
+      $list[$account->realname] = '<a href="user/'. $account->uid .'">'. $account->realname .'</a>';
+    }
+    ksort($list);
+    $lines[] = implode($list, ', ') .'.';
+  }
+  
+  return (!$plain_text) ? implode($lines, '<br />') : strip_tags(implode($lines, "\r\n"));
+}
+
+/**
  * This function creates programmatically the products to add for a certain service.
  * It is important to verify all the data before calling it and the format on how
  * to pass the data is specified here as an example. The idea is that this function

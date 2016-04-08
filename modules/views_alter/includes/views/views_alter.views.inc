@@ -14,6 +14,20 @@
 function views_alter_views_query_alter(&$view, &$query) {
   switch ($view->name) {
     case 'provider':
+      switch ($view->current_display) {
+        case 'provider_report_list':
+          if ($view->exposed_raw_input['type'] && $view->exposed_raw_input['type'] == 'in_limbo') {
+            if (isset($query->where[1]['conditions'])) {
+              foreach ($query->where[1]['conditions'] as $k => $cond) {
+                if ($cond['field'] == 'profile_users.type') {
+                  $query->where[1]['conditions'][$k]['value'] = NULL;
+                  $query->where[1]['conditions'][$k]['operator'] = 'IS';
+                }
+              }
+            }
+          }
+          break;
+      }
       /*if (strcmp($view->current_display, 'accountants_to_contact') == 0) {
         $query->add_table('profile_users__field_data_field_contacted_this_month','profile_users__field_data_field_number_budgets');
         $query->add_where_expression(0, 'profile_users__field_data_field_contacted_this_month.field_contacted_this_month_value < profile_users__field_data_field_number_budgets.field_number_budgets_value');
